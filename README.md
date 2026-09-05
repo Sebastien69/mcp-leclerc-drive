@@ -15,6 +15,8 @@ E.Leclerc Drive has no public API. Today the only way to automate it is browser 
 | `find_stores(query)` | Find drives near a postal code or city → name, id, service type, distance, host. |
 | `set_store(store_id)` | Select & remember the active store (resolves the right host automatically). |
 | `get_store()` | Show the currently selected store. |
+| `import_order_history(limit?, resolve_limit?, ean_limit?)` | Import past orders from « Mes commandes » into a local ledger (`~/.mcp-leclerc-drive/*.jsonl`), dedup by order number, re-resolve products against today's catalogue, flag disappeared ones. Idempotent — run it at the start of a session. |
+| `get_order_history(order_no?)` | List imported orders, or the lines of one order with paid prices and current product status. |
 | `search_product(query, sort?, limit?)` | Search the catalogue → products with price (+ promo), numeric price per kg/L, availability, aisle id and an `id`. Sorted by price per unit by default (available first), sort applied **before** `limit` (default 20). |
 | `add_to_cart(product_id, quantity?)` | Add a product to the cart. |
 | `remove_from_cart(product_id)` | Remove a line from the cart. |

@@ -19,7 +19,10 @@ import { z } from "zod";
 import { ChromeSession } from "./browser.js";
 import { loadConfig } from "./config.js";
 import { LeclercClient } from "./leclerc/client.js";
+import { HistoryClient } from "./leclerc/history.js";
+import { HistoryImporter } from "./leclerc/importer.js";
 import { FoundStore, StoreLocator } from "./leclerc/locator.js";
+import { Ledger, median } from "./ledger.js";
 import { StoreState } from "./store.js";
 import { Cart, Product } from "./types.js";
 
@@ -39,6 +42,9 @@ const browser = new ChromeSession({
 const store = new StoreState(config);
 const client = new LeclercClient(config, browser, store);
 const locator = new StoreLocator(config, browser);
+const ledger = new Ledger();
+const history = new HistoryClient(client);
+const importer = new HistoryImporter(client, history, ledger, () => store.current().storeId);
 
 // Cache of the last find_stores results, so set_store can resolve the host
 // (and noPR) from just a store id the user picked.
@@ -311,6 +317,132 @@ server.registerTool(
     return asText(`Magasin actif : ${s.name ?? s.storeId} (id=${s.storeId} @ ${s.host}).`);
   },
 );
+
+
+// ---- Order history / ledger (lot 2) ---------------------------------------
+
+server.registerTool(
+  "import_order_history",
+  {
+    title: "Importer l'historique de commandes",
+    description:
+      "Importe les dernières commandes passées (page « Mes commandes » du compte connecté) " +
+      "dans un ledger local (~/.mcp-leclerc-drive/orders.jsonl), sans doublon. Chaque " +
+      "produit historique est re-résolu contre le catalogue du jour (ids instables) et les " +
+      "produits disparus sont marqués comme tels. À lancer en début de session : idempotent, " +
+      "ne récupère que les commandes inconnues. Premier import ≈ 1 à 3 min pour 20 commandes. " +
+      "Ne modifie ni le panier ni les commandes.",
+    inputSchema: {
+      limit: z.number().int().positive().max(100).default(20).describe("Nombre de commandes récentes à considérer"),
+      resolve_limit: z
+        .number()
+        .int()
+        .nonnegative()
+        .max(200)
+        .default(40)
+        .describe("Max de recherches catalogue pour les produits absents de « Mes produits habituels »"),
+      ean_limit: z
+        .number()
+        .int()
+        .nonnegative()
+        .max(200)
+        .default(25)
+        .describe("Max de fiches produit chargées pour récupérer EAN/marque (0 pour désactiver)"),
+      force_resolve: z.boolean().default(false).describe("Re-résoudre tous les produits, pas seulement les nouveaux"),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
+  async ({ limit, resolve_limit, ean_limit, force_resolve }) => {
+    try {
+      const r = await importer.run({
+        limit,
+        resolveLimit: resolve_limit,
+        eanLimit: ean_limit,
+        forceResolve: force_resolve,
+        onProgress: (m) => console.error(`[import] ${m}`),
+      });
+      const secs = Math.round(r.durationMs / 1000);
+      const lines = [
+        `Import terminé en ${secs} s.`,
+        `Commandes vues : ${r.ordersSeen} — importées : ${r.ordersImported.length}` +
+          (r.ordersImported.length ? ` (${r.ordersImported.join(", ")})` : "") +
+          ` — déjà connues : ${r.ordersSkipped}.`,
+        `Produits résolus : ${r.productsResolved.byId} par id, ${r.productsResolved.byLabel} par libellé, ` +
+          `${r.productsResolved.missing} disparus, ${r.productsResolved.unresolved} en attente` +
+          (r.productsResolved.unresolved ? " (relance import_order_history pour continuer)" : "") +
+          `. Fiches produit (EAN) chargées : ${r.eanFetched}.`,
+        `Ledger : ${r.ledger.orders} commande(s), ${r.ledger.products} produit(s) distinct(s)` +
+          (r.ledger.from ? `, du ${r.ledger.from} au ${r.ledger.to}` : "") +
+          ` — ${r.ledger.missing} disparu(s), ${r.ledger.unresolved} non résolu(s).`,
+      ];
+      return asText(lines.join("\n"));
+    } catch (err) {
+      return asError(err);
+    }
+  },
+);
+
+server.registerTool(
+  "get_order_history",
+  {
+    title: "Voir l'historique importé",
+    description:
+      "Liste les commandes présentes dans le ledger local (importées par import_order_history), " +
+      "avec date, total et nombre de lignes. Avec order_no, détaille les lignes d'une commande " +
+      "(produit, quantité, prix payé, statut actuel du produit).",
+    inputSchema: {
+      order_no: z.string().optional().describe("Numéro de commande à détailler (optionnel)"),
+      limit: z.number().int().positive().max(100).default(20).describe("Nombre de commandes listées"),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ order_no, limit }) => {
+    try {
+      const orders = ledger.orders();
+      if (orders.length === 0) {
+        return asText("Ledger vide. Lance import_order_history pour importer tes commandes.");
+      }
+      if (order_no) {
+        const o = orders.find((x) => x.orderNo === order_no);
+        if (!o) return asText(`Commande ${order_no} inconnue du ledger.`);
+        const lines = o.lines.map((l) => {
+          const rec = ledger.product(l.productId);
+          const status =
+            !rec ? "" : rec.status === "missing" ? " ⚠️ disparu du catalogue" :
+            rec.status === "unresolved" ? " (non résolu)" :
+            rec.currentId !== l.productId ? ` → id actuel ${rec.currentId}` : "";
+          const avail = rec?.status === "active" && rec.available === false ? " ⚠️ indisponible" : "";
+          return `• ${l.quantity}× ${l.label} — ${eur(l.unitPrice)}/u, ${eur(l.lineTotal)} (id=${l.productId})${status}${avail}`;
+        });
+        return asText(
+          `Commande ${o.orderNo} du ${o.date.replace("T", " ").slice(0, 16)} — ${o.lines.length} ligne(s)` +
+            (o.total !== undefined ? `, total ${eur(o.total)}` : "") +
+            (o.savings ? `, économies ${eur(o.savings)}` : "") +
+            ` :\n${lines.join("\n")}`,
+        );
+      }
+      const s = ledger.summary();
+      const rows = orders.slice(0, limit).map(
+        (o) =>
+          `• ${o.orderNo} — ${o.date.slice(0, 10)} — ${o.lines.length} ligne(s)` +
+          (o.itemCount ? `, ${o.itemCount} articles` : "") +
+          (o.total !== undefined ? ` — ${eur(o.total)}` : "") +
+          (o.state ? ` (${o.state})` : ""),
+      );
+      return asText(
+        `${s.orders} commande(s) dans le ledger (${s.from} → ${s.to}), ${s.products} produits distincts, ` +
+          `${s.missing} disparus, ${s.unresolved} non résolus.\n${rows.join("\n")}`,
+      );
+    } catch (err) {
+      return asError(err);
+    }
+  },
+);
+
+// Kept minimal on purpose: the aggregated views (usual products, promo
+// qualification against the paid-price median) are lot 3. `median` is imported
+// here so the ledger helper is exercised by the typechecker until then.
+void median;
 
 async function main() {
   const transport = new StdioServerTransport();

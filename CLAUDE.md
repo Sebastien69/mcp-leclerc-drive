@@ -44,7 +44,37 @@ Contraintes non négociables, dans l'ordre :
   `search_product` (tri avant troncature), `ContractChangedError`, annotations
   MCP (`registerTool`). Non testé en live via le serveur MCP (pas de session
   Chrome dédiée sur cette machine encore) : lancer `npm run smoke` une fois.
-- Prochaine étape : lot 2, en s'appuyant sur §6–7 de `docs/api-capture.md`.
+- **Lot 2 : implémenté, test live en attente de connexion.** Fichiers :
+  `src/ledger.ts` (JSONL `~/.mcp-leclerc-drive/orders.jsonl` + `products.jsonl`,
+  dernier enregistrement produit gagnant), `src/leclerc/history.ts` (parsers DOM
+  purs + `HistoryClient`), `src/leclerc/resolve.ts` (normalisation/Jaccard des
+  libellés), `src/leclerc/importer.ts` (`import_order_history`). Outils MCP :
+  `import_order_history(limit, resolve_limit, ean_limit, force_resolve)` et
+  `get_order_history(order_no?)`. Tests : `npm test` (7 tests, fixtures
+  synthétiques calquées sur le HTML live). CLI : `npm run import`.
+  Décisions prises :
+  - Le filtre année est un GET `?AnneeSelectionnee=YYYY` ; la pagination
+    (5 commandes) se rejoue par POST du postback « En voir plus » (validé live :
+    2025 = 12 commandes en un seul postback).
+  - Les fetch cross-origin courses ↔ espace-client passent avec CORS +
+    credentials (validé live) : pas de navigation d'onglet nécessaire.
+  - Résolution en deux temps : d'abord « Mes produits habituels » (1 page, couvre
+    l'essentiel), puis recherche par libellé bornée par `resolve_limit` ; le
+    reste est `unresolved` et reprend au prochain import ; introuvable ⇒
+    `missing` explicite. Match par id si l'id existe encore, sinon libellé
+    exact normalisé, sinon Jaccard ≥ 0,6.
+  - EAN/marque : fiche produit (`sCodeEAN`, `sLibelleMarque`, `sComposition`,
+    `sAllergenes` présents, validé live) chargée au plus `ean_limit` fois par
+    import, cachée dans `products.jsonl`.
+  - Le prix de ligne du détail de commande est **avant** remises immédiates ;
+    les économies sont au niveau de la commande (`savings`).
+- Le serveur a sa config magasin dans `~/.mcp-leclerc-drive/config.json`
+  (176901 / fd5). Sa fenêtre Chrome dédiée (port 9222, profil
+  `~/.mcp-leclerc-drive/chrome`) doit être connectée à Leclerc Drive une fois.
+- Prochaine étape : valider `npm run import` en live, puis lot 3
+  (`get_usual_products`, `build_cart_from_history`, `compare_products`) en
+  s'appuyant sur `Ledger.purchaseStats()` + `median()` et sur les produits
+  `active` du ledger.
 
 ## Décision : forker `skunkobi/mcp-leclerc-drive`
 

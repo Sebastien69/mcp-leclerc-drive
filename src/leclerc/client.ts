@@ -38,7 +38,7 @@ const STORE_PAGE_MARKER = "lstProduitsLight";
  * interstitial or an expired session — surface that with an actionable message
  * instead of returning an empty list.
  */
-function assertStorePage(html: string): void {
+export function assertStorePage(html: string): void {
   if (html.includes(STORE_PAGE_MARKER)) return;
   const expired = /session a expir|sessionexpiree/i.test(html);
   throw new Error(
@@ -172,6 +172,55 @@ export class LeclercClient {
       s.storeId,
       s.noPR,
     )}/recherche.aspx?TexteRecherche=${encodeURIComponent(query)}`;
+  }
+
+  // ---- Generic page fetch (used by the order-history client) --------------
+
+  /**
+   * GET an HTML page through the browser session (throttled, retried). Works
+   * for the courses host AND the espace-client host: both allow credentialed
+   * cross-origin fetches from a store page (validated live 2026-09-05), so no
+   * tab navigation is needed. Callers apply their own page guard.
+   */
+  async fetchHtml(url: string): Promise<string> {
+    const res = await this.send("GET", url, { Accept: "text/html" });
+    if (!res.ok) throw new Error(`HTTP ${res.status} (${res.statusText}) sur ${url}`);
+    return res.text();
+  }
+
+  /** POST an HTML form (ASP.NET postback) and return the resulting page. */
+  async postForm(url: string, fields: Record<string, string>): Promise<string> {
+    const body = new URLSearchParams(fields).toString();
+    const res = await this.send(
+      "POST",
+      url,
+      { "Content-Type": "application/x-www-form-urlencoded", Accept: "text/html" },
+      body,
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status} (${res.statusText}) sur ${url}`);
+    return res.text();
+  }
+
+  /** Courses-host URL for a store-relative path (no cosmetic slug). */
+  storeUrl(path: string): string {
+    const s = this.store.current();
+    return `${this.origin()}/${storePath(s.storeId, s.noPR)}/${path}`;
+  }
+
+  /**
+   * Espace-client host for the active store: `fdN-courses.` → `fdN-espace-client.`
+   * (validated on fd5). Paths there are prefixed with `/drive/`.
+   */
+  espaceClientUrl(path: string): string {
+    const s = this.store.current();
+    if (!s.host.includes("-courses.")) {
+      throw new Error(
+        `Impossible de déduire l'espace client depuis le host « ${s.host} » ` +
+          `(attendu : fdN-courses.leclercdrive.fr).`,
+      );
+    }
+    const host = s.host.replace("-courses.", "-espace-client.");
+    return `https://${host}/drive/${storePath(s.storeId, s.noPR)}/${path}`;
   }
 
   // ---- Search ------------------------------------------------------------

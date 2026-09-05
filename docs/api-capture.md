@@ -233,10 +233,19 @@ iQteDisponible > 0`. All unavailable items were exactly `1 / 0`.
   service, payment, slot, total, delivery fee, product count ("55 produits" =
   total quantity, not lines), savings.
 - **History depth**: year filter `ddlFiltreAnnees` offers **2024, 2025, 2026**
-  ⇒ ≥ 2 years available. Switching year is an ASP.NET **postback**
-  (`__doPostBack` with `__VIEWSTATE` + `__EVENTVALIDATION`, field name
-  `ctl00$ctl00$mainMutiUnivers$main$ascWCCD010_HistoriqueCommandes$ddlFiltreAnnees`).
-  Backfill needs 1 GET + 1 POST per extra year.
+  ⇒ ≥ 2 years available. Switching year is a plain **GET**:
+  `mes-commandes.aspx?AnneeSelectionnee=2025` (the dropdown's change handler
+  redirects; a POST postback on the dropdown does NOT filter).
+- **Pagination**: 5 orders per page + an « En voir plus » link-button
+  (`a.aWCCD353_Plus`, `__doPostBack('…ascWCCD010_HistoriqueCommandes$lbEnVoirPlus','')`).
+  Replaying it as a classic form POST (all hidden inputs + selects of the form,
+  `__EVENTTARGET` = that target) returns the full page with the extra orders —
+  validated live: 2025 went from 5 to its 12 orders in one postback, after which
+  the button disappears. Not an async (UpdatePanel) response.
+- Order counts observed: 2026 → 5 (Jun–Sep), 2025 → 12. The row markup is one
+  `<tr>` per order in `<table id="historique">` (number link
+  `…lvHistCom_ctrl{N}_hlNumeroCommande`, totals in a nested
+  `…lvHistCom_ctrl{N}_tbEspaceClient` table).
 
 ### 7b. Detail — `GET .../detail-commande.aspx?iIdC=...`
 
@@ -256,7 +265,16 @@ iQteDisponible > 0`. All unavailable items were exactly `1 / 0`.
 
 ### 7c. Cross-host note
 
-`ChromeSession.ensurePage()` navigates by origin; the espace-client pages are a
-different origin from the courses host, so the first history call will
-navigate the CDP tab there (and back on the next search). Same cookies
-(`.leclercdrive.fr`), same DataDome session — no re-login observed.
+Validated live: `fetch(..., {credentials: "include"})` from a courses page to
+the espace-client host (and the reverse) returns **200 with a readable body**
+(CORS allowed, `type: "cors"`). So the client fetches history pages from the
+store tab without navigating. Same cookies (`.leclercdrive.fr`), same DataDome
+session — no re-login observed.
+
+## 8. Product sheet — `GET .../fiche-produits-{id}-{slug}.aspx`
+
+`sUrlPageProduit` from any product record (~480 KB page, carries the store
+marker). Embedded JSON exposes what list pages don't: **`sCodeEAN`** (13
+digits), **`sLibelleMarque`** ("Marque repère"), `sComposition`,
+`sAllergenes`, `sConservation`, `sOrigine` / `sLibelleOrigine`. No Nutri-Score
+field found. One page load per product ⇒ fetched lazily and cached in the ledger.
