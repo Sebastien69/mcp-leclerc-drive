@@ -39,7 +39,24 @@ export interface LabelMatch<T> {
 }
 
 /** Accept a fuzzy match only above this token overlap. */
-export const FUZZY_THRESHOLD = 0.6;
+export const FUZZY_THRESHOLD = 0.7;
+
+/**
+ * Tokens carrying a quantity/format ("250g", "6x1l", "x12", "1p"). Two labels
+ * describing the same product must agree on them: "Ketchup 250g" vs "Ketchup
+ * 342g" is a different reference, however close the words are.
+ */
+export function formatTokens(s: string): Set<string> {
+  return new Set([...tokens(s)].filter((t) => /\d/.test(t)));
+}
+
+function sameFormat(a: string, b: string): boolean {
+  const fa = formatTokens(a);
+  const fb = formatTokens(b);
+  if (fa.size !== fb.size) return false;
+  for (const t of fa) if (!fb.has(t)) return false;
+  return true;
+}
 
 /** Best candidate by label; undefined when nothing is close enough. */
 export function bestLabelMatch<T>(
@@ -52,6 +69,7 @@ export function bestLabelMatch<T>(
   for (const c of candidates) {
     const cl = labelOf(c);
     if (normalizeLabel(cl) === target) return { item: c, kind: "label_exact", score: 1 };
+    if (!sameFormat(label, cl)) continue;
     const score = labelSimilarity(label, cl);
     if (score >= FUZZY_THRESHOLD && (!best || score > best.score)) {
       best = { item: c, kind: "label_fuzzy", score };

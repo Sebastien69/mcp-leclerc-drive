@@ -21,8 +21,14 @@ import { loadConfig } from "./config.js";
 import { LeclercClient } from "./leclerc/client.js";
 import { HistoryClient } from "./leclerc/history.js";
 import { HistoryImporter } from "./leclerc/importer.js";
+import {
+  buildCartFromHistory,
+  compareProducts,
+  findSubstitutes,
+  usualProducts,
+} from "./leclerc/insights.js";
 import { FoundStore, StoreLocator } from "./leclerc/locator.js";
-import { Ledger, median } from "./ledger.js";
+import { Ledger } from "./ledger.js";
 import { StoreState } from "./store.js";
 import { Cart, Product } from "./types.js";
 
@@ -166,6 +172,35 @@ server.registerTool(
     try {
       const cart = await client.addToCart(product_id, quantity);
       return asText(`Ajouté.\n\n${formatCart(cart)}`);
+    } catch (err) {
+      return asError(err);
+    }
+  },
+);
+
+server.registerTool(
+  "add_many",
+  {
+    title: "Ajouter plusieurs produits",
+    description:
+      "Ajoute plusieurs produits au panier en une fois (modifie le panier Leclerc réel). " +
+      "Même effet que add_to_cart répété, mais un seul appel et un seul état de panier en retour. " +
+      "Les requêtes restent espacées côté serveur (anti-DataDome).",
+    inputSchema: {
+      items: z
+        .array(z.object({ product_id: z.string(), quantity: z.number().int().positive().default(1) }))
+        .min(1)
+        .max(80)
+        .describe("Liste de {product_id, quantity}"),
+    },
+    annotations: ADDITIVE,
+  },
+  async ({ items }) => {
+    try {
+      const r = await client.addMany(items.map((i) => ({ productId: i.product_id, quantity: i.quantity })));
+      const head = `Ajoutés : ${r.added.length}/${items.length}.` +
+        (r.failed.length ? ` Échecs : ${r.failed.map((f) => `${f.productId} (${f.error})`).join("; ")}.` : "");
+      return asText(`${head}\n\n${r.cart ? formatCart(r.cart) : ""}`);
     } catch (err) {
       return asError(err);
     }
@@ -439,10 +474,185 @@ server.registerTool(
   },
 );
 
-// Kept minimal on purpose: the aggregated views (usual products, promo
-// qualification against the paid-price median) are lot 3. `median` is imported
-// here so the ledger helper is exercised by the typechecker until then.
-void median;
+// ---- High-level tools (lot 3) ----------------------------------------------
+
+const pct = (n: number) => `${n > 0 ? "+" : ""}${n} %`;
+
+server.registerTool(
+  "get_usual_products",
+  {
+    title: "Mes produits récurrents",
+    description:
+      "Produits achetés de façon récurrente d'après le ledger (import_order_history), avec " +
+      "fréquence, quantité habituelle, dernier achat, prix médian payé et état actuel " +
+      "(disponible, disparu, prix du jour vs médiane). Lecture seule, sans appel au site.",
+    inputSchema: {
+      min_orders: z.number().int().positive().default(2).describe("Nombre minimal de commandes contenant le produit"),
+      limit: z.number().int().positive().max(300).default(50).describe("Nombre de produits listés"),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ min_orders, limit }) => {
+    try {
+      const list = usualProducts(ledger, { minOrders: min_orders, limit });
+      if (list.length === 0) {
+        return asText(
+          ledger.orders().length === 0
+            ? "Ledger vide. Lance import_order_history d'abord."
+            : `Aucun produit présent dans au moins ${min_orders} commandes.`,
+        );
+      }
+      const rows = list.map((u) => {
+        const st = u.current;
+        const state =
+          !st || st.status === "unresolved" ? "non résolu" :
+          st.status === "missing" ? "⚠️ disparu" :
+          st.available === false ? "⚠️ indisponible" :
+          `${eur(st.promoPrice !== undefined && st.promoPrice < (st.price ?? 0) ? st.promoPrice : st.price ?? 0)}` +
+            (u.priceDeltaPct !== undefined ? ` (${pct(u.priceDeltaPct)} vs médiane)` : "");
+        return (
+          `• ${u.label} — ${u.orders}/${u.totalOrders} commandes, ~${u.avgQuantity}/commande, ` +
+          `dernier ${u.lastDate}` +
+          (u.medianPaid ? `, payé ~${eur(u.medianPaid)}` : "") +
+          ` — ${state}` +
+          (st?.status === "active" && st.currentId ? ` id=${st.currentId}` : ` id_hist=${u.productId}`)
+        );
+      });
+      return asText(`${list.length} produit(s) récurrent(s) :\n${rows.join("\n")}`);
+    } catch (err) {
+      return asError(err);
+    }
+  },
+);
+
+server.registerTool(
+  "build_cart_from_history",
+  {
+    title: "Panier depuis l'historique",
+    description:
+      "Reconstitue un panier à partir des N dernières commandes du ledger. En mode dry_run " +
+      "(défaut) ne fait que proposer : produits prêts à ajouter (identiques, disponibles), " +
+      "produits à arbitrer (correspondance approximative ou indisponibles) et produits disparus. " +
+      "Avec dry_run=false, ajoute au panier Leclerc réel les produits « prêts » (jamais ceux à " +
+      "arbitrer). Ne valide jamais de commande.",
+    inputSchema: {
+      last_n: z.number().int().positive().max(20).default(1).describe("Nombre de commandes récentes à reprendre"),
+      dry_run: z.boolean().default(true).describe("true = proposer seulement ; false = ajouter les produits prêts au panier"),
+      skip_ids: z.array(z.string()).default([]).describe("Ids (historiques ou actuels) à ne pas ajouter"),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  async ({ last_n, dry_run, skip_ids }) => {
+    try {
+      const p = await buildCartFromHistory(ledger, client, {
+        lastN: last_n,
+        dryRun: dry_run,
+        skipIds: skip_ids,
+        onProgress: (m) => console.error(`[cart] ${m}`),
+      });
+      const fmt = (items: typeof p.ready) =>
+        items.map((i) => `  • ${i.quantity}× ${i.label}${i.price !== undefined ? ` — ${eur(i.price)}` : ""}` +
+          (i.addId ? ` (id=${i.addId})` : ` (id_hist=${i.productId})`) + (i.reason && i.reason !== "identique" ? ` — ${i.reason}` : ""));
+      const out = [
+        `Depuis ${p.orders.length} commande(s) : ${p.orders.join(", ")}.`,
+        `Prêts à ajouter (${p.ready.length}, ≈ ${eur(p.estimatedTotal)}) :`,
+        ...(p.ready.length ? fmt(p.ready) : ["  (aucun)"]),
+        `À arbitrer (${p.review.length}) :`,
+        ...(p.review.length ? fmt(p.review) : ["  (aucun)"]),
+        `Disparus / non résolus (${p.gone.length}) :`,
+        ...(p.gone.length ? fmt(p.gone) : ["  (aucun)"]),
+      ];
+      if (p.added) {
+        out.push(
+          `\nAjoutés au panier : ${p.added.length}` +
+            (p.failed?.length ? ` — échecs : ${p.failed.map((f) => `${f.productId} (${f.error})`).join("; ")}` : "") +
+            ". Utilise get_cart pour vérifier.",
+        );
+      } else {
+        out.push("\nMode proposition : rien n'a été ajouté. Relance avec dry_run=false pour ajouter les produits prêts.");
+      }
+      return asText(out.join("\n"));
+    } catch (err) {
+      return asError(err);
+    }
+  },
+);
+
+server.registerTool(
+  "compare_products",
+  {
+    title: "Comparer des produits",
+    description:
+      "Recherche des produits et les compare au prix par unité (kg ou L), par groupe d'unité " +
+      "identique. Pour les produits déjà achetés, compare le prix du jour à la médiane des prix " +
+      "payés (ledger) et qualifie la promo : « vraie promo » (≥ 10 % sous la médiane), « prix " +
+      "habituel » ou « plus cher qu'avant ». Plus fiable que le prix barré affiché.",
+    inputSchema: {
+      query: z.string().describe("Termes de recherche, ex. 'huile d'olive'"),
+      limit: z.number().int().positive().max(50).default(15).describe("Produits par groupe d'unité"),
+    },
+    annotations: READ_ONLY,
+  },
+  async ({ query, limit }) => {
+    try {
+      const c = await compareProducts(ledger, client, query, limit);
+      if (c.total === 0) return asText(`Aucun produit trouvé pour « ${query} ».`);
+      const blocks = c.groups.map((g) => {
+        const rows = g.items.map(({ product: p, timesBought, medianPaid, deltaPct, verdict }) => {
+          const best = p.promoPrice !== undefined && p.promoPrice < p.price ? p.promoPrice : p.price;
+          return (
+            `• ${p.pricePerUnit ? `[${p.pricePerUnit}] ` : ""}${p.label} — ${eur(best)}` +
+            (p.promoPrice !== undefined && p.promoPrice < p.price ? ` (affiché promo, au lieu de ${eur(p.price)})` : "") +
+            (p.available ? "" : " ⚠️ indisponible") +
+            (timesBought ? ` — acheté ${timesBought}×, payé ~${eur(medianPaid ?? 0)}${deltaPct !== undefined ? `, ${pct(deltaPct)} → ${verdict}` : ""}` : "") +
+            ` id=${p.id}`
+          );
+        });
+        return `Prix au ${g.unit} (${g.items.length} produits) :\n${rows.join("\n")}`;
+      });
+      return asText(`${c.total} produit(s) pour « ${query} », du moins cher au plus cher par unité.\n\n${blocks.join("\n\n")}`);
+    } catch (err) {
+      return asError(err);
+    }
+  },
+);
+
+server.registerTool(
+  "find_substitutes",
+  {
+    title: "Trouver un substitut",
+    description:
+      "Propose les produits les plus proches d'un produit habituel indisponible ou disparu : " +
+      "même rayon, même unité, même format, prix par unité le plus proche, libellé/marque " +
+      "similaires. Donne product_id (id historique ou actuel connu du ledger) ou un libellé.",
+    inputSchema: {
+      product_id: z.string().optional().describe("Id du produit de référence (ledger)"),
+      label: z.string().optional().describe("Libellé de référence si l'id est inconnu"),
+      limit: z.number().int().positive().max(20).default(5),
+    },
+    annotations: READ_ONLY,
+  },
+  async ({ product_id, label, limit }) => {
+    try {
+      const r = await findSubstitutes(ledger, client, { productId: product_id, label }, limit);
+      if (r.substitutes.length === 0) return asText(`Aucun substitut disponible trouvé pour « ${r.reference.label} ».`);
+      const rows = r.substitutes.map(
+        ({ product: p, reasons }) =>
+          `• ${p.label} — ${eur(p.promoPrice !== undefined && p.promoPrice < p.price ? p.promoPrice : p.price)}` +
+          (p.pricePerUnit ? ` [${p.pricePerUnit}]` : "") +
+          (reasons.length ? ` — ${reasons.join(", ")}` : "") +
+          ` id=${p.id}`,
+      );
+      return asText(
+        `Substituts pour « ${r.reference.label} »` +
+          (r.reference.pricePerUnitValue ? ` (référence ${r.reference.pricePerUnitValue} €/${r.reference.unit ?? "u"})` : "") +
+          ` :\n${rows.join("\n")}`,
+      );
+    } catch (err) {
+      return asError(err);
+    }
+  },
+);
 
 async function main() {
   const transport = new StdioServerTransport();

@@ -42,7 +42,7 @@ const listPage = (rows, withMore = true) => `<html><body><form method="post" act
 </select>
 <h2>Mon historique de commandes</h2>
 <table id="historique" class="tbEspaceClient"><tbody>${rows}</tbody></table>
-${withMore ? `<a class="aWCCD353_Plus" href="javascript:__doPostBack('ctl00$ctl00$mainMutiUnivers$main$ascWCCD010_HistoriqueCommandes$lbEnVoirPlus','')">En voir plus</a>` : ""}
+${withMore ? `<a class="aWCCD353_Plus" href="javascript:__doPostBack(&#39;ctl00$ctl00$mainMutiUnivers$main$ascWCCD010_HistoriqueCommandes$lbEnVoirPlus&#39;,&#39;&#39;)">En voir plus</a>` : ""}
 </form></body></html>`;
 
 test("parseOrderList: one summary per row, totals not polluted by the slot", () => {
@@ -130,17 +130,20 @@ test("parseOrderDetail: header, lines, quantities, unit price, aisle", () => {
   assert.throws(() => parseOrderDetail("<html>COMMANDE N°1 DU 01/01/2026 À 10H00</html>"), /ContractChanged|LigneArticle/);
 });
 
-test("parseProductSheet: EAN, brand, ingredients from the embedded JSON", () => {
+test("parseProductSheet: EAN/brand read from the requested product's own records only", () => {
   const html = `<html>lstProduitsLight
-   Utilitaires.widget.initOptions('x', {"objContenu":{"sCodeEAN":"3564700012345","sLibelleMarque":"Marque rep\\u00e8re","sComposition":"\\nLAIT ORIGINE : FRANCE","sAllergenes":"","sLibelleOrigine":null}});
+   initOptions('reco', {"objElement":{"iIdProduit":222290,"sLibelleLigne1":"Poivron","sCodeEAN":"3701385102484","sLibelleMarque":""}});
+   initOptions('main', {"objElement":{"iIdProduit":2613,"sLibelleLigne1":"Lait","sCodeEAN":"3564700012345","sLibelleMarque":"Marque rep\\u00e8re","sComposition":"\\nLAIT ORIGINE : FRANCE","sAllergenes":"","sLibelleOrigine":null}});
   </html>`;
-  assert.deepEqual(parseProductSheet(html), {
+  assert.deepEqual(parseProductSheet(html, "2613"), {
     ean: "3564700012345",
     brand: "Marque repère",
     ingredients: "LAIT ORIGINE : FRANCE",
     allergens: undefined,
     origin: undefined,
   });
+  // Unknown id ⇒ nothing, never another product's EAN.
+  assert.equal(parseProductSheet(html, "999").ean, undefined);
 });
 
 test("resolve: normalization and label matching", () => {
@@ -154,10 +157,14 @@ test("resolve: normalization and label matching", () => {
   const exact = bestLabelMatch("Filet de poulet extra tendre Le Gaulois - 300g", cands, (c) => c.label);
   assert.equal(exact.item.id, "2");
   assert.equal(exact.kind, "label_exact");
-  const fuzzy = bestLabelMatch("Filet de poulet extra tendre Le Gaulois x2 300g", cands, (c) => c.label);
+  const fuzzy = bestLabelMatch("Filet de poulet extra tendre Le Gaulois Label - 300g", cands, (c) => c.label);
   assert.equal(fuzzy.item.id, "2");
   assert.equal(fuzzy.kind, "label_fuzzy");
   assert.equal(bestLabelMatch("Eau gazeuse Badoit 6x1L", cands, (c) => c.label), undefined);
+  // Same words, different format ⇒ different reference (seen live: 250g → 342g, 200g → 350g).
+  assert.equal(bestLabelMatch("Tomato Ketchup Heinz - 250g", [{ id: "9", label: "Tomato Ketchup Heinz - 342g" }], (c) => c.label), undefined);
+  // Brand swap on a short label falls under the threshold (seen live: Ferrero → Regia).
+  assert.equal(bestLabelMatch("Couscous Grain Moyen Ferrero - 500g", [{ id: "9", label: "Couscous Grain Moyen Regia - 500G" }], (c) => c.label), undefined);
 });
 
 test("ledger: append-only JSONL, dedup by order, last product record wins, stats", () => {

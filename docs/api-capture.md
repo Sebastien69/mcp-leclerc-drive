@@ -278,3 +278,9 @@ marker). Embedded JSON exposes what list pages don't: **`sCodeEAN`** (13
 digits), **`sLibelleMarque`** ("Marque repère"), `sComposition`,
 `sAllergenes`, `sConservation`, `sOrigine` / `sLibelleOrigine`. No Nutri-Score
 field found. One page load per product ⇒ fetched lazily and cached in the ledger.
+
+⚠️ The sheet embeds **~20 product records with their own `sCodeEAN`**
+(recommendations, "souvent achetés ensemble"); the requested product appears
+in ~3 of them. Read the EAN only from records whose `iIdProduit` matches —
+taking the first `sCodeEAN` on the page attributes another product's code
+(observed: an aubergine sheet returned the pepper's EAN 3701385102484).

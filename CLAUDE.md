@@ -71,10 +71,27 @@ Contraintes non négociables, dans l'ordre :
 - Le serveur a sa config magasin dans `~/.mcp-leclerc-drive/config.json`
   (176901 / fd5). Sa fenêtre Chrome dédiée (port 9222, profil
   `~/.mcp-leclerc-drive/chrome`) doit être connectée à Leclerc Drive une fois.
-- Prochaine étape : valider `npm run import` en live, puis lot 3
-  (`get_usual_products`, `build_cart_from_history`, `compare_products`) en
-  s'appuyant sur `Ledger.purchaseStats()` + `median()` et sur les produits
-  `active` du ledger.
+- **Import validé en live** (2026-09-05) : 30 commandes (sept. 2025 → sept.
+  2026), ~780 produits distincts. Corrections issues du live : href du postback
+  encodé en `&#39;`, EAN lu uniquement dans les enregistrements du produit
+  demandé (la fiche embarque ~20 produits recommandés avec leur propre EAN),
+  correspondance floue durcie (tokens de format identiques + Jaccard ≥ 0,7,
+  sinon « Ketchup 250g » matchait « 342g »). Une correspondance `label_fuzzy`
+  reste enregistrée `active` mais est traitée comme « à arbitrer » par
+  `build_cart_from_history`, jamais ajoutée automatiquement.
+- **Lot 3 : fait** — `src/leclerc/insights.ts` : `get_usual_products`,
+  `build_cart_from_history(last_n, dry_run=true, skip_ids)`,
+  `compare_products(query)` (groupé par unité, verdict « vraie promo » si
+  ≥ 10 % sous la médiane payée), `find_substitutes(product_id|label)`
+  (même rayon/unité/format, prix par unité le plus proche). Tests dans
+  `test/insights.test.mjs`.
+- **Lot 4 : fait (partie utile)** — `add_many(items)` et cache du dernier
+  panier connu dans `LeclercClient` (fusion des événements de mutation dans le
+  panier complet ; `updateQuantity` ne recharge la page que si le cache est
+  vide).
+- Reste : pass EAN complet (`npm run import 30 0 400`, ~10 min, une fois),
+  push GitHub (auth manquante), et vivre avec : le premier vrai panier dira si
+  les seuils (0,7 / 10 %) sont bons.
 
 ## Décision : forker `skunkobi/mcp-leclerc-drive`
 

@@ -17,6 +17,11 @@ E.Leclerc Drive has no public API. Today the only way to automate it is browser 
 | `get_store()` | Show the currently selected store. |
 | `import_order_history(limit?, resolve_limit?, ean_limit?)` | Import past orders from « Mes commandes » into a local ledger (`~/.mcp-leclerc-drive/*.jsonl`), dedup by order number, re-resolve products against today's catalogue, flag disappeared ones. Idempotent — run it at the start of a session. |
 | `get_order_history(order_no?)` | List imported orders, or the lines of one order with paid prices and current product status. |
+| `get_usual_products(min_orders?, limit?)` | Recurring products from the ledger: frequency, usual quantity, last purchase, median paid price, current price/availability. |
+| `build_cart_from_history(last_n?, dry_run?, skip_ids?)` | Rebuild a cart from the last N orders: ready / needs-review / gone. `dry_run=false` adds the ready lines to the real cart. |
+| `compare_products(query, limit?)` | Per-unit price comparison grouped by unit, with paid-price median from the ledger to qualify promos. |
+| `find_substitutes(product_id? \| label?, limit?)` | Closest alternatives for an unavailable/missing product (same aisle, unit, format, closest €/unit). |
+| `add_many(items)` | Add several products in one call. |
 | `search_product(query, sort?, limit?)` | Search the catalogue → products with price (+ promo), numeric price per kg/L, availability, aisle id and an `id`. Sorted by price per unit by default (available first), sort applied **before** `limit` (default 20). |
 | `add_to_cart(product_id, quantity?)` | Add a product to the cart. |
 | `remove_from_cart(product_id)` | Remove a line from the cart. |

@@ -154,7 +154,7 @@ export class HistoryImporter {
       );
       for (const r of pending.slice(0, eanLimit)) {
         try {
-          const sheet = await this.history.productSheet(r.productUrl as string);
+          const sheet = await this.history.productSheet(r.productUrl as string, r.currentId ?? r.productId);
           this.ledger.upsertProduct({
             ...r,
             ean: sheet.ean ?? r.ean,

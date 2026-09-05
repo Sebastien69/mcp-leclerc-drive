@@ -62,8 +62,13 @@ export interface RawProduct {
   iIdProduit: number | string;
   sLibelleLigne1?: string;
   sLibelleLigne2?: string;
-  /** Not observed in list pages (product sheet only). */
+  /** Product-sheet only (see docs/api-capture.md §8). */
   sLibelleMarque?: string;
+  sCodeEAN?: string | number;
+  sComposition?: string;
+  sAllergenes?: string;
+  sLibelleOrigine?: string;
+  sOrigine?: string;
   nrPVUnitaireTTC?: number;
   sPrixUnitaire?: string;
   /** "0,00 €" when there is no promo. */
@@ -104,6 +109,12 @@ const DEFAULT_SORT: SearchSort = "price_per_unit";
 
 export class LeclercClient {
   private readonly throttler: Throttler;
+  /**
+   * Last cart state seen (from a mutation's event stream or a getCart read).
+   * Lets updateQuantity() pick its direction without a page load when a
+   * mutation already told us the current quantity (lot 4).
+   */
+  private lastCart?: Cart;
 
   constructor(
     private readonly config: LeclercConfig,
@@ -291,7 +302,42 @@ export class LeclercClient {
           `First chars: ${text.slice(0, 120)}`,
       );
     }
-    return this.cartFromEvents(events);
+    const partial = this.cartFromEvents(events);
+    // The event stream only carries the lines touched by this mutation (plus the
+    // authoritative Panier totals). Merge into the last full cart when we have
+    // one; otherwise return the partial view and leave the cache empty so
+    // updateQuantity() falls back to a real read.
+    if (this.lastCart) {
+      const items = this.lastCart.items.filter((i) => i.product.id !== String(productId));
+      items.push(...partial.items.filter((i) => i.product.id === String(productId)));
+      this.lastCart = { ...partial, items };
+      return this.lastCart;
+    }
+    return partial;
+  }
+
+  /**
+   * Several additions in one call (lot 4): still one request per line (the
+   * endpoint is per product) but a single throttled sequence, and one cart
+   * state at the end instead of N round-trips through the MCP client.
+   */
+  async addMany(items: { productId: string; quantity: number }[]): Promise<{
+    cart?: Cart;
+    added: { productId: string; quantity: number }[];
+    failed: { productId: string; error: string }[];
+  }> {
+    const added: { productId: string; quantity: number }[] = [];
+    const failed: { productId: string; error: string }[] = [];
+    let cart: Cart | undefined;
+    for (const it of items) {
+      try {
+        cart = await this.addToCart(it.productId, it.quantity);
+        added.push(it);
+      } catch (err) {
+        failed.push({ productId: it.productId, error: (err as Error).message });
+      }
+    }
+    return { cart, added, failed };
   }
 
   async addToCart(productId: string, quantity: number): Promise<Cart> {
@@ -312,9 +358,14 @@ export class LeclercClient {
   }
 
   private async currentQuantity(productId: string): Promise<number> {
-    const cart = await this.getCart();
+    const cart = this.lastCart ?? (await this.getCart());
     const line = cart.items.find((i) => i.product.id === String(productId));
     return line?.quantity ?? 0;
+  }
+
+  /** Forget the cached cart (e.g. after the user edited the cart in the browser). */
+  invalidateCart(): void {
+    this.lastCart = undefined;
   }
 
   // ---- Cart read ---------------------------------------------------------
@@ -348,12 +399,14 @@ export class LeclercClient {
     }
     const grandTotal =
       parseEuro(extractCartTotal(html)) ?? round2(items.reduce((s, i) => s + i.lineTotal, 0));
-    return {
+    const cart: Cart = {
       items,
       itemCount: items.reduce((s, i) => s + i.quantity, 0),
       total: round2(grandTotal),
       storeId: this.store.current().storeId,
     };
+    this.lastCart = cart;
+    return cart;
   }
 
   /** Build a Cart from a mutation event array (see capture doc §2). */

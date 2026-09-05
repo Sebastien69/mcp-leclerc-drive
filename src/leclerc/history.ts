@@ -16,7 +16,7 @@
 
 import { OrderLine, OrderRecord } from "../ledger.js";
 import { Product } from "../types.js";
-import { LeclercClient, mapProduct, scanProductRecords, assertStorePage } from "./client.js";
+import { LeclercClient, RawProduct, mapProduct, scanProductRecords, assertStorePage } from "./client.js";
 import { ContractChangedError } from "./errors.js";
 
 export interface OrderSummary {
@@ -115,9 +115,12 @@ export function parseOrderList(html: string): OrderSummary[] {
  * target when the page has more to load, else undefined.
  */
 export function parseLoadMoreTarget(html: string): string | undefined {
-  const m = html.match(/aWCCD353_Plus[^>]*href="javascript:__doPostBack\('([^']+)','([^']*)'\)"/) ??
-    html.match(/__doPostBack\('([^']+lbEnVoirPlus[^']*)','([^']*)'\)/);
-  return m?.[1].replace(/&#36;/g, "$");
+  // Live markup encodes the quotes: href="javascript:__doPostBack(&#39;…lbEnVoirPlus&#39;,&#39;&#39;)".
+  const q = "(?:'|&#39;|&apos;)";
+  const m =
+    html.match(new RegExp(`aWCCD353_Plus[^>]*href="javascript:__doPostBack\\(${q}([^'&"]+)${q},${q}[^'&"]*${q}\\)"`)) ??
+    html.match(new RegExp(`__doPostBack\\(${q}([^'&"]*lbEnVoirPlus[^'&"]*)${q}`));
+  return m ? decodeEntities(m[1]) : undefined;
 }
 
 /** Hidden inputs + selects of the first form, for replaying an ASP.NET postback. */
@@ -192,27 +195,32 @@ export function parseOrderDetail(html: string): { orderNo: string; date: string;
   return { orderNo, date, lines };
 }
 
-/** Product sheet (`fiche-produits-…aspx`): EAN, brand, ingredients… */
-export function parseProductSheet(html: string): ProductSheet {
+/**
+ * Product sheet (`fiche-produits-…aspx`): EAN, brand, ingredients…
+ *
+ * ⚠️ The sheet embeds ~20 product records (recommendations, "often bought
+ * with"), each with its own `sCodeEAN`. Taking the first EAN on the page
+ * silently attributes another product's code (seen live: an aubergine got a
+ * pepper's EAN). So we only read records whose `iIdProduit` is the requested
+ * one, merging the fields across them.
+ */
+export function parseProductSheet(html: string, productId: string): ProductSheet {
   assertStorePage(html);
-  const js = (key: string): string | undefined => {
-    const m = html.match(new RegExp(`"${key}"\\s*:\\s*("(?:[^"\\\\]|\\\\.)*"|\\d+|null)`));
-    if (!m) return undefined;
-    if (m[1] === "null") return undefined;
-    try {
-      const v = JSON.parse(m[1]);
-      return v === "" || v === null ? undefined : decodeEntities(String(v));
-    } catch {
-      return undefined;
+  const own = scanProductRecords(html).filter((r) => String(r.iIdProduit) === String(productId));
+  const pick = <K extends keyof RawProduct>(k: K): string | undefined => {
+    for (const r of own) {
+      const v = r[k];
+      if (v !== undefined && v !== null && String(v).trim() !== "") return decodeEntities(String(v)).trim();
     }
+    return undefined;
   };
-  const ean = js("sCodeEAN")?.replace(/\D/g, "");
+  const ean = pick("sCodeEAN")?.replace(/\D/g, "");
   return {
     ean: ean && ean.length >= 8 ? ean : undefined,
-    brand: js("sLibelleMarque"),
-    ingredients: js("sComposition")?.trim(),
-    allergens: js("sAllergenes")?.trim(),
-    origin: js("sLibelleOrigine") ?? js("sOrigine"),
+    brand: pick("sLibelleMarque"),
+    ingredients: pick("sComposition"),
+    allergens: pick("sAllergenes"),
+    origin: pick("sLibelleOrigine") ?? pick("sOrigine"),
   };
 }
 
@@ -303,9 +311,9 @@ export class HistoryClient {
     return parseHabitualProducts(html);
   }
 
-  async productSheet(productUrl: string): Promise<ProductSheet> {
+  async productSheet(productUrl: string, productId: string): Promise<ProductSheet> {
     const url = new URL(productUrl, this.client.storeUrl("")).toString();
-    return parseProductSheet(await this.client.fetchHtml(url));
+    return parseProductSheet(await this.client.fetchHtml(url), productId);
   }
 }
 
