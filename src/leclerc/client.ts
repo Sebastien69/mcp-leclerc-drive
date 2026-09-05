@@ -151,11 +151,22 @@ export class LeclercClient {
       let lastStatus = 0;
       for (let attempt = 0; attempt <= this.throttler.maxRetries; attempt++) {
         if (attempt > 0) await delay(this.throttler.backoff(attempt));
-        const res = await this.browser.fetch(this.storeBase(), url, {
-          method,
-          headers: extraHeaders,
-          body,
-        });
+        let res: PageResponse;
+        try {
+          res = await this.browser.fetch(this.storeBase(), url, {
+            method,
+            headers: extraHeaders,
+            body,
+          });
+        } catch (err) {
+          // "TypeError: Failed to fetch" from the page: transient (tab still
+          // settling after a navigation, network blip). Seen live on the first
+          // request of a fresh CDP connection. Retry like a 403 instead of failing.
+          if (attempt < this.throttler.maxRetries && /Failed to fetch|navigateur échouée/.test((err as Error).message)) {
+            continue;
+          }
+          throw err;
+        }
         if (!RETRYABLE_STATUSES.has(res.status)) return res;
         lastStatus = res.status;
       }

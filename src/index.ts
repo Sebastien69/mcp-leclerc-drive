@@ -356,6 +356,24 @@ server.registerTool(
 
 // ---- Order history / ledger (lot 2) ---------------------------------------
 
+/**
+ * Auto-refresh for the history-based tools: pick up new orders (cheap budgets)
+ * when the last import is older than LECLERC_REFRESH_HOURS (default 12). Returns
+ * a one-line note for the tool output, or "" when nothing happened.
+ */
+const REFRESH_HOURS = Number(process.env.LECLERC_REFRESH_HOURS ?? 12);
+async function autoRefresh(): Promise<string> {
+  if (!(REFRESH_HOURS > 0)) return "";
+  const r = await importer.refreshIfStale(REFRESH_HOURS, (m) => console.error(`[refresh] ${m}`));
+  if (!r.ran) return "";
+  if (r.error) return `(⚠️ mise à jour de l'historique impossible : ${r.error} — données du dernier import utilisées)\n`;
+  const n = r.report?.ordersImported.length ?? 0;
+  const blocked = r.report?.blocked ? " ⚠️ interrompue par un blocage Leclerc" : "";
+  return n > 0
+    ? `(historique mis à jour : ${n} nouvelle(s) commande(s) importée(s)${blocked})\n`
+    : `(historique vérifié : aucune nouvelle commande${blocked})\n`;
+}
+
 server.registerTool(
   "import_order_history",
   {
@@ -366,6 +384,9 @@ server.registerTool(
       "produit historique est re-résolu contre le catalogue du jour (ids instables) et les " +
       "produits disparus sont marqués comme tels. À lancer en début de session : idempotent, " +
       "ne récupère que les commandes inconnues. Premier import ≈ 1 à 3 min pour 20 commandes. " +
+      "Les outils basés sur l'historique (get_usual_products, build_cart_from_history, " +
+      "get_order_history) le déclenchent d'eux-mêmes en version allégée si le dernier import a " +
+      "plus de 12 h : l'appeler explicitement n'est utile que pour un import profond. " +
       "Ne modifie ni le panier ni les commandes.",
     inputSchema: {
       limit: z.number().int().positive().max(100).default(20).describe("Nombre de commandes récentes à considérer"),
@@ -435,9 +456,10 @@ server.registerTool(
   },
   async ({ order_no, limit }) => {
     try {
+      const note = await autoRefresh();
       const orders = ledger.orders();
       if (orders.length === 0) {
-        return asText("Ledger vide. Lance import_order_history pour importer tes commandes.");
+        return asText(note + "Ledger vide. Lance import_order_history pour importer tes commandes.");
       }
       if (order_no) {
         const o = orders.find((x) => x.orderNo === order_no);
@@ -452,7 +474,7 @@ server.registerTool(
           return `• ${l.quantity}× ${l.label} — ${eur(l.unitPrice)}/u, ${eur(l.lineTotal)} (id=${l.productId})${status}${avail}`;
         });
         return asText(
-          `Commande ${o.orderNo} du ${o.date.replace("T", " ").slice(0, 16)} — ${o.lines.length} ligne(s)` +
+          note + `Commande ${o.orderNo} du ${o.date.replace("T", " ").slice(0, 16)} — ${o.lines.length} ligne(s)` +
             (o.total !== undefined ? `, total ${eur(o.total)}` : "") +
             (o.savings ? `, économies ${eur(o.savings)}` : "") +
             ` :\n${lines.join("\n")}`,
@@ -467,7 +489,7 @@ server.registerTool(
           (o.state ? ` (${o.state})` : ""),
       );
       return asText(
-        `${s.orders} commande(s) dans le ledger (${s.from} → ${s.to}), ${s.products} produits distincts, ` +
+        note + `${s.orders} commande(s) dans le ledger (${s.from} → ${s.to}), ${s.products} produits distincts, ` +
           `${s.missing} disparus, ${s.unresolved} non résolus.\n${rows.join("\n")}`,
       );
     } catch (err) {
@@ -496,12 +518,13 @@ server.registerTool(
   },
   async ({ min_orders, limit }) => {
     try {
+      const note = await autoRefresh();
       const list = usualProducts(ledger, { minOrders: min_orders, limit });
       if (list.length === 0) {
         return asText(
-          ledger.orders().length === 0
+          note + (ledger.orders().length === 0
             ? "Ledger vide. Lance import_order_history d'abord."
-            : `Aucun produit présent dans au moins ${min_orders} commandes.`,
+            : `Aucun produit présent dans au moins ${min_orders} commandes.`),
         );
       }
       const rows = list.map((u) => {
@@ -520,7 +543,7 @@ server.registerTool(
           (st?.status === "active" && st.currentId ? ` id=${st.currentId}` : ` id_hist=${u.productId}`)
         );
       });
-      return asText(`${list.length} produit(s) récurrent(s) :\n${rows.join("\n")}`);
+      return asText(`${note}${list.length} produit(s) récurrent(s) :\n${rows.join("\n")}`);
     } catch (err) {
       return asError(err);
     }
@@ -546,6 +569,7 @@ server.registerTool(
   },
   async ({ last_n, dry_run, skip_ids }) => {
     try {
+      const note = await autoRefresh();
       const p = await buildCartFromHistory(ledger, client, {
         lastN: last_n,
         dryRun: dry_run,
@@ -556,7 +580,7 @@ server.registerTool(
         items.map((i) => `  • ${i.quantity}× ${i.label}${i.price !== undefined ? ` — ${eur(i.price)}` : ""}` +
           (i.addId ? ` (id=${i.addId})` : ` (id_hist=${i.productId})`) + (i.reason && i.reason !== "identique" ? ` — ${i.reason}` : ""));
       const out = [
-        `Depuis ${p.orders.length} commande(s) : ${p.orders.join(", ")}.`,
+        note + `Depuis ${p.orders.length} commande(s) : ${p.orders.join(", ")}.`,
         `Prêts à ajouter (${p.ready.length}, ≈ ${eur(p.estimatedTotal)}) :`,
         ...(p.ready.length ? fmt(p.ready) : ["  (aucun)"]),
         `À arbitrer (${p.review.length}) :`,

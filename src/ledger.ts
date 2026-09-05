@@ -16,7 +16,7 @@
  * the raw historical id alone.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -93,6 +93,34 @@ export class Ledger {
   }
   get productsPath(): string {
     return join(this.dir, "products.jsonl");
+  }
+  get metaPath(): string {
+    return join(this.dir, "ledger-meta.json");
+  }
+
+  // ---- Meta (last import) --------------------------------------------------
+
+  /** ISO time of the last completed import, or undefined. */
+  lastImportAt(): string | undefined {
+    try {
+      if (!existsSync(this.metaPath)) return undefined;
+      const m = JSON.parse(readFileSync(this.metaPath, "utf8"));
+      return typeof m.lastImportAt === "string" ? m.lastImportAt : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  markImported(at: Date = new Date()): void {
+    mkdirSync(this.dir, { recursive: true });
+    writeFileSync(this.metaPath, JSON.stringify({ lastImportAt: at.toISOString() }, null, 2) + "\n", "utf8");
+  }
+
+  /** True when no import happened in the last `maxAgeHours`. */
+  isStale(maxAgeHours: number, now: Date = new Date()): boolean {
+    const last = this.lastImportAt();
+    if (!last) return true;
+    return now.getTime() - new Date(last).getTime() > maxAgeHours * 3600 * 1000;
   }
 
   // ---- Orders ------------------------------------------------------------

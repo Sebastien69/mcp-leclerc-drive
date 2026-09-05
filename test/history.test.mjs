@@ -193,3 +193,19 @@ test("ledger: append-only JSONL, dedup by order, last product record wins, stats
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("ledger meta: staleness drives the automatic refresh", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ledger-meta-"));
+  try {
+    const l = new Ledger(dir);
+    assert.equal(l.lastImportAt(), undefined);
+    assert.equal(l.isStale(12), true);
+    const t = new Date("2026-09-05T10:00:00Z");
+    l.markImported(t);
+    assert.equal(new Ledger(dir).lastImportAt(), "2026-09-05T10:00:00.000Z");
+    assert.equal(l.isStale(12, new Date("2026-09-05T21:00:00Z")), false);
+    assert.equal(l.isStale(12, new Date("2026-09-05T23:00:00Z")), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

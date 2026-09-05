@@ -13,6 +13,10 @@
  *     that don't have one yet — cached forever in the ledger.
  *
  * Re-running continues where the budgets stopped. Nothing here mutates the cart.
+ *
+ * `refreshIfStale()` is the "it just happens" entry point: the history-based
+ * tools call it first, so new orders are picked up automatically (small
+ * budgets, at most once per `maxAgeHours`) without the user asking for an import.
  */
 
 import { Ledger, ProductRecord } from "../ledger.js";
@@ -46,13 +50,42 @@ export interface ImportReport {
   durationMs: number;
 }
 
+export interface RefreshResult {
+  ran: boolean;
+  report?: ImportReport;
+  /** Set when the refresh was attempted and failed (stale data is still served). */
+  error?: string;
+}
+
 export class HistoryImporter {
+  private refreshing?: Promise<RefreshResult>;
+
   constructor(
     private readonly client: LeclercClient,
     private readonly history: HistoryClient,
     private readonly ledger: Ledger,
     private readonly storeId: () => string,
   ) {}
+
+  /**
+   * Import new orders if the last import is older than `maxAgeHours` (default
+   * 12). Cheap budgets: newest 10 orders (1–2 list pages + 1 detail per new
+   * order), 10 label searches (≈ 15 s while a resolution backlog remains, then
+   * ~3 s), no product sheets. Never throws: a block or an
+   * expired session is reported in `error` and the caller serves the ledger as is.
+   */
+  refreshIfStale(maxAgeHours = 12, log?: (m: string) => void): Promise<RefreshResult> {
+    if (!this.ledger.isStale(maxAgeHours)) return Promise.resolve({ ran: false });
+    if (!this.refreshing) {
+      this.refreshing = this.run({ limit: 10, resolveLimit: 10, eanLimit: 0, onProgress: log })
+        .then((report) => ({ ran: true, report }))
+        .catch((err) => ({ ran: true, error: (err as Error).message }))
+        .finally(() => {
+          this.refreshing = undefined;
+        });
+    }
+    return this.refreshing;
+  }
 
   async run(opts: ImportOptions = {}): Promise<ImportReport> {
     const t0 = Date.now();
@@ -180,6 +213,9 @@ export class HistoryImporter {
         }
       }
     }
+
+    // A blocked run still counts as an import attempt: don't retry on every tool call.
+    this.ledger.markImported();
 
     return {
       blocked,
