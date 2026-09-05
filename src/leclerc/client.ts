@@ -2,21 +2,22 @@
  * Leclerc Drive backend client.
  *
  * Endpoints reverse-engineered and validated live against store 053701 on
- * 2026-06-13 — see docs/api-capture.md for the full capture.
+ * 2026-06-13, product fields re-validated against store 176901 on 2026-09-05 —
+ * see docs/api-capture.md for the full capture.
  *
  * Confidence levels:
  *  - Cart mutations (add / update / remove) hit a clean JSON endpoint and were
  *    replayed successfully end-to-end. High confidence.
  *  - search() and getCart() extract data embedded in the page as JS globals
- *    (`_objDataSourceGroupeTrieFiltre`, `objContenuPanier`). The field schema is
- *    validated; the exact extraction from live HTML is marked `// VALIDATE:` and
- *    should be sanity-checked on first real run with a session cookie.
+ *    (`objElement` records inside `initOptions(...)` calls). The field schema is
+ *    validated live; `assertProductContract()` fails loudly if it drifts.
  */
 
 import { ChromeSession, PageResponse } from "../browser.js";
 import { LeclercConfig, storePath } from "../config.js";
 import { StoreState } from "../store.js";
-import { Cart, CartItem, Product } from "../types.js";
+import { Cart, CartItem, Product, SearchOptions, SearchResult, SearchSort } from "../types.js";
+import { ContractChangedError } from "./errors.js";
 import { delay, Throttler } from "./throttle.js";
 
 /** HTTP statuses that indicate a DataDome challenge / rate-limit worth retrying. */
@@ -52,26 +53,54 @@ function assertStorePage(html: string): void {
 const ACTION_ADD = 1; // add / increase to target qty
 const ACTION_SUB = 2; // decrease / remove (qty 0)
 
-interface RawProduct {
+/**
+ * Product record as embedded in store pages (`objElement`). Every field below was
+ * observed live on 2026-09-05 (search + produits-habituels) unless marked
+ * "not observed" — those are kept for tolerance and never relied upon.
+ */
+export interface RawProduct {
   iIdProduit: number | string;
   sLibelleLigne1?: string;
   sLibelleLigne2?: string;
+  /** Not observed in list pages (product sheet only). */
+  sLibelleMarque?: string;
   nrPVUnitaireTTC?: number;
   sPrixUnitaire?: string;
+  /** "0,00 €" when there is no promo. */
   sPrixPromo?: string;
+  sPrixPromoParUniteDeMesure?: string;
+  /** Numeric price per kg / l — the field to sort on. */
   nrPVParUniteDeMesureTTC?: number;
   sPrixParUniteDeMesure?: string;
+  /** Unit of `nrPVParUniteDeMesureTTC`: "kg", "l"… */
+  sUniteMesureTotale?: string;
+  sUniteMesure?: string;
+  nrContenanceTotale?: number;
+  /** 0 = orderable, 1 = unavailable ("Bientôt disponible"). */
+  eDisponibilite?: number;
+  /** Not observed live (ncleton's contract) — honoured when present. */
+  fProduitEpuise?: boolean;
   iQteDisponible?: number;
+  iQteMaxPanier?: number;
   iQuantitePanier?: number;
   iQtePanier?: number;
   rTotalAPayer?: number;
   sTotalAPayer?: string;
   sUrlVignetteProduit?: string;
+  sUrlPageProduit?: string;
+  /** Substitution page for an unavailable product ("Produits similaires"). */
+  sUrlRemplacerProduit?: string;
+  fProduitSubstitution?: boolean;
+  iIdRayon?: number;
+  iIdFamille?: number;
+  niIdSousFamille?: number;
   sType?: string;
 }
 
 /** Query token that returns no search results, so a fetched page carries only cart data. */
 const NO_MATCH_QUERY = "zzzznomatchzzz";
+
+const DEFAULT_SORT: SearchSort = "price_per_unit";
 
 export class LeclercClient {
   private readonly throttler: Throttler;
@@ -147,7 +176,7 @@ export class LeclercClient {
 
   // ---- Search ------------------------------------------------------------
 
-  async searchProducts(query: string): Promise<Product[]> {
+  async searchProducts(query: string, opts: SearchOptions = {}): Promise<SearchResult> {
     const res = await this.send("GET", this.searchUrl(query), { Accept: "text/html" });
     if (!res.ok) throw new Error(`Search HTTP ${res.status} (${res.statusText})`);
     const html = await res.text();
@@ -158,15 +187,24 @@ export class LeclercClient {
     // Each `objElement` is pure JSON, so we scan the page for every product
     // record (smallest object enclosing an `iIdProduit`) and map it.
     const seen = new Set<string>();
-    const products: Product[] = [];
+    const raws: RawProduct[] = [];
     for (const rp of scanProductRecords(html)) {
       if (rp.sType && rp.sType !== "Produit") continue;
+      // Only full catalogue records (the cart summary embeds id-only records).
+      if (!rp.sLibelleLigne1) continue;
       const id = String(rp.iIdProduit);
       if (seen.has(id)) continue;
       seen.add(id);
-      products.push(mapProduct(rp));
+      raws.push(rp);
     }
-    return products;
+    assertProductContract(raws);
+
+    const products = sortProducts(raws.map(mapProduct), opts.sort ?? DEFAULT_SORT);
+    const limit = opts.limit && opts.limit > 0 ? opts.limit : undefined;
+    return {
+      products: limit ? products.slice(0, limit) : products,
+      total: products.length,
+    };
   }
 
   // ---- Cart mutations ----------------------------------------------------
@@ -302,19 +340,90 @@ interface CartEvent {
   objElement?: Record<string, unknown> & Partial<RawProduct>;
 }
 
-function mapProduct(rp: RawProduct): Product {
+/**
+ * Fail loudly when the product records no longer carry the fields we depend on
+ * (instead of mapping every product to price 0 / unavailable). Only checked on
+ * list pages with at least one record.
+ */
+export function assertProductContract(raws: RawProduct[]): void {
+  if (raws.length === 0) return;
+  const has = (k: keyof RawProduct) => raws.some((r) => r[k] !== undefined && r[k] !== null);
+  if (!has("nrPVUnitaireTTC") && !has("sPrixUnitaire")) {
+    throw new ContractChangedError("Les produits Leclerc n'exposent plus de prix unitaire.");
+  }
+  if (!has("eDisponibilite") && !has("iQteDisponible") && !has("fProduitEpuise")) {
+    throw new ContractChangedError(
+      "Les produits Leclerc n'exposent plus d'information de disponibilité.",
+    );
+  }
+}
+
+/**
+ * Availability, ported from ncleton (validated live 2026-09-05):
+ * orderable ⇔ `eDisponibilite === 0` and stock > 0 and not `fProduitEpuise`.
+ * Unavailable products come back with `eDisponibilite: 1, iQteDisponible: 0`.
+ * Falls back to `iQteDisponible > 0` when `eDisponibilite` is absent (cart
+ * mutation events), so a missing field never yields a false negative.
+ */
+export function isAvailable(rp: RawProduct): boolean {
+  if (rp.fProduitEpuise === true) return false;
+  const stock = num(rp.iQteDisponible);
+  const dispo = num(rp.eDisponibilite);
+  if (dispo !== undefined) return dispo === 0 && (stock === undefined || stock > 0);
+  if (stock !== undefined) return stock > 0;
+  // Neither field present (partial record): don't flag as unavailable.
+  return true;
+}
+
+export function mapProduct(rp: RawProduct): Product {
   const label = decodeEntities(
     [rp.sLibelleLigne1, rp.sLibelleLigne2].filter(Boolean).join(" ").trim(),
   );
   const price = num(rp.nrPVUnitaireTTC) ?? parseEuro(rp.sPrixUnitaire) ?? 0;
-  return {
+  const promo = parseEuro(rp.sPrixPromo);
+  const ppu = num(rp.nrPVParUniteDeMesureTTC) ?? parseEuro(rp.sPrixParUniteDeMesure);
+  const product: Product = {
     id: String(rp.iIdProduit),
     label: label || `Produit ${rp.iIdProduit}`,
     price,
-    pricePerUnit: rp.sPrixParUniteDeMesure || undefined,
-    available: (num(rp.iQteDisponible) ?? 0) > 0,
-    imageUrl: rp.sUrlVignetteProduit || undefined,
+    available: isAvailable(rp),
   };
+  if (rp.sLibelleMarque) product.brand = decodeEntities(rp.sLibelleMarque);
+  if (promo !== undefined && promo > 0) product.promoPrice = promo;
+  if (rp.sPrixParUniteDeMesure) product.pricePerUnit = rp.sPrixParUniteDeMesure;
+  if (ppu !== undefined && ppu > 0) product.pricePerUnitValue = ppu;
+  if (rp.sUniteMesureTotale) product.unit = rp.sUniteMesureTotale;
+  const content = num(rp.nrContenanceTotale);
+  if (content !== undefined && content > 0) product.content = content;
+  const stock = num(rp.iQteDisponible);
+  if (stock !== undefined) product.stock = stock;
+  if (rp.iIdRayon !== undefined) product.aisleId = String(rp.iIdRayon);
+  if (rp.iIdFamille !== undefined) product.familyId = String(rp.iIdFamille);
+  if (rp.sUrlVignetteProduit) product.imageUrl = rp.sUrlVignetteProduit;
+  if (rp.sUrlPageProduit) product.productUrl = rp.sUrlPageProduit;
+  return product;
+}
+
+/**
+ * Sort products. Always sort BEFORE truncating (the cheapest per-unit option is
+ * often far down Leclerc's relevance order). Available products come first for
+ * the price sorts; products without a per-unit price go last.
+ */
+export function sortProducts(products: Product[], sort: SearchSort): Product[] {
+  if (sort === "relevance") return products;
+  const key =
+    sort === "price"
+      ? (p: Product) => p.promoPrice ?? p.price
+      : (p: Product) => p.pricePerUnitValue;
+  return [...products].sort((a, b) => {
+    if (a.available !== b.available) return a.available ? -1 : 1;
+    const ka = key(a);
+    const kb = key(b);
+    if (ka === undefined && kb === undefined) return a.price - b.price;
+    if (ka === undefined) return 1;
+    if (kb === undefined) return -1;
+    return ka - kb || a.price - b.price;
+  });
 }
 
 /**
@@ -322,7 +431,7 @@ function mapProduct(rp: RawProduct): Product {
  * HTML/JS blob (exact key match, so `lstProduits` does not match
  * `lstProduitsLight`). Returns the `[...]` substring, or null.
  */
-function extractArrayNamed(html: string, name: string): string | null {
+export function extractArrayNamed(html: string, name: string): string | null {
   const marker = `"${name}":[`;
   const at = html.indexOf(marker);
   if (at < 0) return null;
@@ -359,7 +468,7 @@ function extractCartTotal(html: string): string | undefined {
  * non-JSON members (functions). Finds each `"iIdProduit"` occurrence and parses
  * the smallest enclosing `{...}` object, skipping any that fail to parse.
  */
-function scanProductRecords(raw: string): RawProduct[] {
+export function scanProductRecords(raw: string): RawProduct[] {
   const out: RawProduct[] = [];
   const re = /"iIdProduit"\s*:/g;
   let m: RegExpExecArray | null;
@@ -422,6 +531,7 @@ function num(v: unknown): number | undefined {
 function parseEuro(v: unknown): number | undefined {
   if (typeof v !== "string") return undefined;
   const cleaned = v.replace(/[^\d,.-]/g, "").replace(",", ".");
+  if (cleaned === "") return undefined;
   const n = Number(cleaned);
   return Number.isNaN(n) ? undefined : n;
 }

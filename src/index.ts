@@ -6,9 +6,8 @@
  * MCP client can drive grocery ordering natively instead of via browser
  * automation.
  *
- * The tool *contracts* are final; the underlying client (src/leclerc/client.ts)
- * still needs its endpoints wired up from a network capture — until then tools
- * return a clear "not reverse-engineered yet" error.
+ * Login, slot booking and checkout stay manual on purpose: no tool here ever
+ * validates an order or pays.
  */
 
 import { readFileSync } from "node:fs";
@@ -50,15 +49,29 @@ const server = new McpServer({
   version: pkg.version,
 });
 
+// MCP tool annotations. `readOnlyHint` tells the agent a tool has no side
+// effect; `destructiveHint: false` marks an additive mutation (add_to_cart),
+// true marks one that can remove/lower cart lines.
+const READ_ONLY = { readOnlyHint: true, openWorldHint: true } as const;
+const ADDITIVE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } as const;
+const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true } as const;
+
+const eur = (n: number) => `${n.toFixed(2).replace(".", ",")} €`;
+
 function formatProduct(p: Product): string {
+  const priceBit =
+    p.promoPrice !== undefined && p.promoPrice < p.price
+      ? `— ${eur(p.promoPrice)} (promo, au lieu de ${eur(p.price)})`
+      : `— ${eur(p.price)}`;
   const bits = [
     p.label,
     p.brand ? `(${p.brand})` : null,
-    `— ${p.price.toFixed(2)} €`,
+    priceBit,
     p.pricePerUnit ? `[${p.pricePerUnit}]` : null,
     p.nutriScore ? `Nutri-Score ${p.nutriScore}` : null,
     p.available ? null : "⚠️ indisponible",
     `id=${p.id}`,
+    p.aisleId ? `rayon=${p.aisleId}` : null,
   ].filter(Boolean);
   return bits.join(" ");
 }
@@ -67,13 +80,13 @@ function formatCart(cart: Cart): string {
   if (cart.items.length === 0) return "Panier vide.";
   const lines = cart.items.map(
     (it) =>
-      `• ${it.quantity}× ${it.product.label} — ${it.lineTotal.toFixed(2)} € ` +
+      `• ${it.quantity}× ${it.product.label} — ${eur(it.lineTotal)} ` +
       `(id=${it.product.id})`,
   );
   return (
     `Panier (magasin ${cart.storeId}) — ${cart.itemCount} article(s) :\n` +
     lines.join("\n") +
-    `\n\nTotal : ${cart.total.toFixed(2)} €`
+    `\n\nTotal : ${eur(cart.total)}`
   );
 }
 
@@ -86,29 +99,62 @@ function asError(err: unknown) {
   return { content: [{ type: "text" as const, text: `Erreur : ${message}` }], isError: true };
 }
 
-server.tool(
+server.registerTool(
   "search_product",
-  "Recherche des produits dans le catalogue Leclerc Drive du magasin configuré. " +
-    "Retourne label, prix, prix au kilo/litre, Nutri-Score, disponibilité et l'id " +
-    "à utiliser pour add_to_cart.",
-  { query: z.string().describe("Termes de recherche, ex. 'lait demi-écrémé bio'") },
-  async ({ query }) => {
+  {
+    title: "Rechercher des produits",
+    description:
+      "Recherche des produits dans le catalogue Leclerc Drive du magasin configuré. " +
+      "Retourne label, prix (et prix promo), prix au kilo/litre, disponibilité, l'id " +
+      "à utiliser pour add_to_cart et l'id de rayon. Trié par défaut du moins cher au " +
+      "plus cher au kilo/litre (produits disponibles d'abord) — le tri est appliqué " +
+      "AVANT la limite. Ne compare le prix au kilo/litre qu'entre produits de même unité.",
+    inputSchema: {
+      query: z.string().describe("Termes de recherche, ex. 'lait demi-écrémé bio'"),
+      sort: z
+        .enum(["price_per_unit", "price", "relevance"])
+        .default("price_per_unit")
+        .describe(
+          "Ordre : 'price_per_unit' (prix au kg/L croissant, défaut), 'price' (prix " +
+            "unitaire croissant) ou 'relevance' (ordre du site).",
+        ),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(200)
+        .default(20)
+        .describe("Nombre max de produits retournés, après tri (défaut 20)."),
+    },
+    annotations: READ_ONLY,
+  },
+  async ({ query, sort, limit }) => {
     try {
-      const products = await client.searchProducts(query);
-      if (products.length === 0) return asText(`Aucun produit trouvé pour « ${query} ».`);
-      return asText(products.map(formatProduct).join("\n"));
+      const { products, total } = await client.searchProducts(query, { sort, limit });
+      if (total === 0) return asText(`Aucun produit trouvé pour « ${query} ».`);
+      const head =
+        total > products.length
+          ? `${total} produits trouvés, ${products.length} affichés (tri : ${sort}) :\n`
+          : `${total} produit(s) trouvé(s) (tri : ${sort}) :\n`;
+      return asText(head + products.map(formatProduct).join("\n"));
     } catch (err) {
       return asError(err);
     }
   },
 );
 
-server.tool(
+server.registerTool(
   "add_to_cart",
-  "Ajoute un produit au panier. Utilise l'id retourné par search_product.",
   {
-    product_id: z.string().describe("Identifiant produit (champ id de search_product)"),
-    quantity: z.number().int().positive().default(1).describe("Quantité à ajouter"),
+    title: "Ajouter au panier",
+    description:
+      "Ajoute un produit au panier (modifie le panier Leclerc réel). Utilise l'id " +
+      "retourné par search_product. Ne valide jamais de commande.",
+    inputSchema: {
+      product_id: z.string().describe("Identifiant produit (champ id de search_product)"),
+      quantity: z.number().int().positive().default(1).describe("Quantité cible"),
+    },
+    annotations: ADDITIVE,
   },
   async ({ product_id, quantity }) => {
     try {
@@ -120,10 +166,14 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "remove_from_cart",
-  "Retire complètement un produit du panier.",
-  { product_id: z.string().describe("Identifiant produit à retirer") },
+  {
+    title: "Retirer du panier",
+    description: "Retire complètement un produit du panier (modifie le panier Leclerc réel).",
+    inputSchema: { product_id: z.string().describe("Identifiant produit à retirer") },
+    annotations: DESTRUCTIVE,
+  },
   async ({ product_id }) => {
     try {
       const cart = await client.removeFromCart(product_id);
@@ -134,12 +184,18 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "update_quantity",
-  "Modifie la quantité d'un produit déjà présent dans le panier.",
   {
-    product_id: z.string().describe("Identifiant produit"),
-    quantity: z.number().int().nonnegative().describe("Nouvelle quantité (0 pour retirer)"),
+    title: "Modifier une quantité",
+    description:
+      "Fixe la quantité d'un produit déjà présent dans le panier (modifie le panier " +
+      "Leclerc réel). 0 retire la ligne.",
+    inputSchema: {
+      product_id: z.string().describe("Identifiant produit"),
+      quantity: z.number().int().nonnegative().describe("Nouvelle quantité (0 pour retirer)"),
+    },
+    annotations: DESTRUCTIVE,
   },
   async ({ product_id, quantity }) => {
     try {
@@ -151,10 +207,14 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "get_cart",
-  "Affiche le contenu complet du panier avec le total.",
-  {},
+  {
+    title: "Voir le panier",
+    description: "Affiche le contenu complet du panier avec le total.",
+    inputSchema: {},
+    annotations: READ_ONLY,
+  },
   async () => {
     try {
       const cart = await client.getCart();
@@ -165,12 +225,17 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "find_stores",
-  "Recherche les drives E.Leclerc proches d'un code postal ou d'une ville, triés " +
-    "par distance. Retourne pour chacun : nom, identifiant (à passer à set_store), " +
-    "type de service (drive/relais/livraison), distance et magasin.",
-  { query: z.string().describe("Code postal ou ville, ex. '44000' ou 'Nantes'") },
+  {
+    title: "Trouver des drives",
+    description:
+      "Recherche les drives E.Leclerc proches d'un code postal ou d'une ville, triés " +
+      "par distance. Retourne pour chacun : nom, identifiant (à passer à set_store), " +
+      "type de service (drive/relais/livraison), distance et magasin.",
+    inputSchema: { query: z.string().describe("Code postal ou ville, ex. '44000' ou 'Nantes'") },
+    annotations: READ_ONLY,
+  },
   async ({ query }) => {
     try {
       const stores = await locator.findStores(query);
@@ -191,16 +256,22 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "set_store",
-  "Sélectionne le magasin actif (et le mémorise pour les prochaines sessions). " +
-    "Utilise l'id renvoyé par find_stores.",
   {
-    store_id: z.string().describe("Identifiant magasin (champ id de find_stores)"),
-    host: z
-      .string()
-      .optional()
-      .describe("Host backend (optionnel) si le magasin n'a pas été trouvé via find_stores"),
+    title: "Choisir le magasin",
+    description:
+      "Sélectionne le magasin actif (et le mémorise pour les prochaines sessions). " +
+      "Utilise l'id renvoyé par find_stores. ⚠️ La session Chrome est liée à un seul " +
+      "drive : choisir un autre magasin que celui où tu es connecté renvoie « session expirée ».",
+    inputSchema: {
+      store_id: z.string().describe("Identifiant magasin (champ id de find_stores)"),
+      host: z
+        .string()
+        .optional()
+        .describe("Host backend (optionnel) si le magasin n'a pas été trouvé via find_stores"),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async ({ store_id, host }) => {
     try {
@@ -227,10 +298,14 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "get_store",
-  "Affiche le magasin actuellement sélectionné (id, host).",
-  {},
+  {
+    title: "Magasin actif",
+    description: "Affiche le magasin actuellement sélectionné (id, host).",
+    inputSchema: {},
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
   async () => {
     const s = store.current();
     return asText(`Magasin actif : ${s.name ?? s.storeId} (id=${s.storeId} @ ${s.host}).`);

@@ -15,7 +15,7 @@ E.Leclerc Drive has no public API. Today the only way to automate it is browser 
 | `find_stores(query)` | Find drives near a postal code or city → name, id, service type, distance, host. |
 | `set_store(store_id)` | Select & remember the active store (resolves the right host automatically). |
 | `get_store()` | Show the currently selected store. |
-| `search_product(query)` | Search the catalogue → products with price, price/kg, Nutri-Score, availability, and an `id`. |
+| `search_product(query, sort?, limit?)` | Search the catalogue → products with price (+ promo), numeric price per kg/L, availability, aisle id and an `id`. Sorted by price per unit by default (available first), sort applied **before** `limit` (default 20). |
 | `add_to_cart(product_id, quantity?)` | Add a product to the cart. |
 | `remove_from_cart(product_id)` | Remove a line from the cart. |
 | `update_quantity(product_id, quantity)` | Set a line's quantity (0 removes it). |

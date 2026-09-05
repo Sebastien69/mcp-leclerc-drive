@@ -44,8 +44,11 @@ try {
   console.log(`   → ${near.length} drives near 44000 (e.g. ${near[0]?.name})\n`);
 
   console.log(`1) search_product("${term}")`);
-  const products = await client.searchProducts(term);
-  console.log(`   → ${products.length} products`);
+  const { products, total } = await client.searchProducts(term, { limit: 30 });
+  console.log(`   → ${total} products (showing ${products.length}, sorted by price per unit)`);
+  for (const p of products.slice(0, 3)) {
+    console.log(`   ${p.pricePerUnit ?? "-"}  ${p.price} EUR  ${p.available ? "" : "[indispo] "}${p.label}`);
+  }
   const target = products.find((p) => p.available);
   if (!target) throw new Error("No available product found to test the cart with.");
   console.log(`   using: ${target.label} [${target.id}] @ ${target.price} EUR\n`);

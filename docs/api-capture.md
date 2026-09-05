@@ -165,3 +165,98 @@ set_store switch to any drive) — see below.
 - **Reverse-engineer the "switch drive" call** so `set_store` can rebind the
   session to any drive server-side (today it must match the browser's drive).
 - Checkout / slot-booking flow (out of scope).
+
+---
+
+# Addendum 2026-09-05 — store 176901 (Lyon 9e, `fd5`), fork Sebastien69
+
+Captured live from a logged-in Chrome session (DevTools + in-page inspection).
+Store host `fd5-courses.leclercdrive.fr`; the customer area lives on a
+**separate host**, `fd5-espace-client.leclercdrive.fr`.
+
+## 5. Product record contract (search + produits-habituels) — re-validated
+
+Same `objElement` records as §1, ~200 per search page (`lait` → 206 records,
+204 unique). Fields confirmed present on **every** record (206/206):
+
+| Field | Observed | Use |
+| --- | --- | --- |
+| `nrPVUnitaireTTC` / `sPrixUnitaire` | `6.3` / `"6,30 €"` | unit price |
+| `sPrixPromo` | `"0,00 €"` when no promo | promo price (>0 ⇒ promo) |
+| `nrPVParUniteDeMesureTTC` / `sPrixParUniteDeMesure` | `1.05` / `"1,05 € / l"` | **numeric** price per unit — sort on it |
+| `sUniteMesureTotale` | `"l"`, `"kg"` | unit of the per-unit price |
+| `nrContenanceTotale`, `nrContenanceUnitaire`, `sUniteMesure` | `6`, `1`, `"L"` | pack content |
+| `eDisponibilite` | `0` orderable, `1` unavailable | availability (with `iQteDisponible`) |
+| `iQteDisponible` | `100`, `0` when unavailable | stock |
+| `iQteMaxPanier`, `iQteMinPanier`, `iQuantitePanier` | | cart limits / current qty |
+| `iIdRayon`, `iIdFamille`, `niIdSousFamille` | `284320`, `284370` | category ids (substitution scope) |
+| `sUrlPageProduit`, `sUrlVignetteProduit` | | product sheet / thumbnail |
+| `fProduitSubstitution`, `sUrlRemplacerProduit` | `true` on unavailable items | "Produits similaires" page |
+| `objAvisClient` `{IdProduit, Note, NbAvis}` | | ratings |
+| `sPrixPromoParUniteDeMesure` | rare (2/206) | promo price per unit |
+| `neTypeLotBrii`, `nrPVBRIIDeduit`, `nfBriiDispo` | ~10 % of records | "bon de réduction immédiat" lots |
+
+**Not present in list pages**: `sLibelleMarque`, `sNutriScore`, `sCodeEAN`,
+`sComposition`, `fProduitEpuise`. Brand/EAN/ingredients only exist on the
+product sheet (`sUrlPageProduit`) — one extra page load per product, so fetch
+lazily and cache (see CLAUDE.md, EAN section). `fProduitEpuise` (from ncleton's
+contract) was never observed; the mapper honours it if it ever appears.
+
+Availability rule (validated on 267 + 206 records): `eDisponibilite === 0 &&
+iQteDisponible > 0`. All unavailable items were exactly `1 / 0`.
+
+## 6. "Mes produits habituels" — `GET .../produits-habituels.aspx`
+
+`https://{host}/magasin-{id}-{id}-{slug}/produits-habituels.aspx` on the
+**courses** host. Leclerc's own aggregated "already ordered" page:
+
+- **Single page, no pagination**: 267 unique products (~2.7 MB HTML) in the same
+  `objElement` format, inside widget `..._pnlElementProduitHabituels`, grouped by
+  aisle (`sLibelleRayon`, `lstEnfants`). `scanProductRecords()` works as-is.
+- Carries **current** catalogue data (today's price, availability), **not**
+  purchase frequency or dates. Unavailable habitual products are kept
+  (35/267 shown as "Bientôt disponible", with `fProduitSubstitution: true`).
+- Filters are exposed as JSON too (`lstBlocsFiltres`: aisles, brands,
+  promotions, seasonal).
+- ⇒ It is the cheap answer to "what do I usually buy" (one load instead of N
+  order pages), but the frequency / price-paid history still needs §7.
+
+## 7. Order history — `fd5-espace-client.leclercdrive.fr`
+
+### 7a. List — `GET /drive/magasin-{id}-{id}-{slug}/mes-commandes.aspx`
+
+- **Server-rendered HTML table**, NOT an `initOptions` JSON blob (the only
+  `initOptions` calls on the page are the header widgets). Parse the DOM.
+- One `<table id$="lvHistCom_ctrl{N}_tbEspaceClient">` per order, 5 orders
+  shown for 2026 so far. Each row: state ("Livrée"), order number link
+  `N°26066422` → `detail-commande.aspx?iIdC={opaque base64 id}`, order date/time,
+  service, payment, slot, total, delivery fee, product count ("55 produits" =
+  total quantity, not lines), savings.
+- **History depth**: year filter `ddlFiltreAnnees` offers **2024, 2025, 2026**
+  ⇒ ≥ 2 years available. Switching year is an ASP.NET **postback**
+  (`__doPostBack` with `__VIEWSTATE` + `__EVENTVALIDATION`, field name
+  `ctl00$ctl00$mainMutiUnivers$main$ascWCCD010_HistoriqueCommandes$ddlFiltreAnnees`).
+  Backfill needs 1 GET + 1 POST per extra year.
+
+### 7b. Detail — `GET .../detail-commande.aspx?iIdC=...`
+
+- Also plain HTML. **Each product line is
+  `<li class="liWCCD353_LigneArticle" iidproduit="126817" stitre1="Filet de poulet extra tendre" stitre2="Le Gaulois - 300g">`**
+  — the product id and both label lines are attributes (39/39 lines had
+  `iidproduit`). Inside: `p.pWCCD353_Quantite` ("x2"), `p.pWCCD051_Prix`
+  (line total, "7,58 €"), `a.aWCCD353_VoirRayon` (href → `rayon-{iIdRayon}-…`),
+  thumbnail `img.imgWCCD353_Produit`.
+- Lines are grouped by aisle heading ("Fruits Légumes (22 produits)").
+- Prices shown are **before** immediate discounts; a "Détail de mes économies"
+  block at the bottom lists the BRII lots and the total saved.
+- Header: `COMMANDE N°26066422 DU 01/09/2026 À 10H27`.
+- ✅ `iidproduit` 126817 (order of 2026-09-01) matches the current catalogue id
+  of the same product on produits-habituels. Id drift over longer periods is
+  still expected — re-resolve by label when the id is unknown to the catalogue.
+
+### 7c. Cross-host note
+
+`ChromeSession.ensurePage()` navigates by origin; the espace-client pages are a
+different origin from the courses host, so the first history call will
+navigate the CDP tab there (and back on the next search). Same cookies
+(`.leclercdrive.fr`), same DataDome session — no re-login observed.
