@@ -89,9 +89,27 @@ Contraintes non négociables, dans l'ordre :
   panier connu dans `LeclercClient` (fusion des événements de mutation dans le
   panier complet ; `updateQuantity` ne recharge la page que si le cache est
   vide).
-- Reste : pass EAN complet (`npm run import 30 0 400`, ~10 min, une fois),
-  push GitHub (auth manquante), et vivre avec : le premier vrai panier dira si
-  les seuils (0,7 / 10 %) sont bons.
+- **Lot 3 validé en live** (`node scripts/insights-smoke.mjs`, lecture seule,
+  ~3,5 s hors ledger) : 12 produits récurrents ≥ 5 commandes sur 30, proposition
+  de panier sur la dernière commande = 28 prêts / 6 à arbitrer / 5 disparus,
+  comparaison « huile d'olive » groupée kg / l, substituts trouvés.
+- Limites connues à garder en tête :
+  - `compare_products` dépend de la recherche Leclerc, très large : on garde les
+    libellés portant tous les mots de la requête (`focusOnQuery`), sinon la
+    liste complète. Les bouillons « à l'huile d'olive » passent encore.
+  - L'id de rayon d'une ligne de commande (lien « Voir le rayon ») ne coïncide
+    pas toujours avec `iIdRayon` des résultats de recherche (sous-rayon vs
+    rayon) : « même rayon » n'est alors pas détecté, le classement reste
+    correct via libellé/format/prix.
+  - Une correspondance floue reste une variante (parfum, brique vs bouteille) :
+    elle n'est jamais ajoutée automatiquement.
+  - ~95 produits sur 456 résolus sont « disparus » après 12 mois : beaucoup de
+    fruits/légumes saisonniers et formats changés. C'est attendu.
+  - Rythme mesuré : ~1,5–1,8 s par requête (recherche, détail, fiche). Import
+    initial de 30 commandes + 200 résolutions ≈ 6 min ; ensuite quelques
+    secondes.
+- Reste : push GitHub (auth manquante) ; vivre avec, le premier vrai panier
+  dira si les seuils (0,7 / 10 %) sont bons.
 
 ## Décision : forker `skunkobi/mcp-leclerc-drive`
 
