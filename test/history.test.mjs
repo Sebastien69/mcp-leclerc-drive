@@ -20,7 +20,7 @@ import { Ledger, median } from "../dist/ledger.js";
 const row = (n, no, date, total, items, sav) => `
 <tr class="noBorder">
  <td><span class="spanWCCD353_Etat spanWCCD353_Niveau1"></span><span class="bold">Livrée</span></td>
- <td><p><a id="ctl00_ctl00_mainMutiUnivers_main_ascWCCD010_HistoriqueCommandes_lvHistCom_ctrl${n}_hlNumeroCommande" class="block aNumCommande" href="https://fd5-espace-client.leclercdrive.fr/drive/magasin-176901-176901-Lyon-9e/detail-commande.aspx?iIdC=abc${n}%3d%3d">N°${no}</a><span>${date}</span></p></td>
+ <td><p><a id="ctl00_ctl00_mainMutiUnivers_main_ascWCCD010_HistoriqueCommandes_lvHistCom_ctrl${n}_hlNumeroCommande" class="block aNumCommande" href="https://fd5-espace-client.leclercdrive.fr/drive/magasin-000001-000001-Ville-Test/detail-commande.aspx?iIdC=abc${n}%3d%3d">N°${no}</a><span>${date}</span></p></td>
  <td><p class="pWCCD353_PointRetrait"><span class="block tdLabel">Livraison à domicile par un professionnel</span></p></td>
  <td><p class="pWCCD353_MoyenPaiement"><span class="block tdLabel"><span>Paiement par carte bancaire</span></span></p></td>
  <td><p class="pWCCD353_PointRetrait"><span class="spanTdHoraire tdLabel"><span>Livraison 31/12/2025 entre 10h30 et 11h30</span></span></p></td>
@@ -47,15 +47,15 @@ ${withMore ? `<a class="aWCCD353_Plus" href="javascript:__doPostBack(&#39;ctl00$
 
 test("parseOrderList: one summary per row, totals not polluted by the slot", () => {
   const html = listPage(
-    row(0, "25106046", "30/12/2025 à 22h21", "137,16", 41) +
-      row(1, "25096165", "27/11/2025 à 18h43", "211,11", 60, "0,70"),
+    row(0, "12345001", "30/12/2025 à 22h21", "137,16", 41) +
+      row(1, "12345002", "27/11/2025 à 18h43", "211,11", 60, "0,70"),
   );
   const orders = parseOrderList(html);
   assert.equal(orders.length, 2);
   assert.deepEqual(
     { ...orders[0], detailUrl: undefined },
     {
-      orderNo: "25106046",
+      orderNo: "12345001",
       date: "2025-12-30T22:21:00",
       detailUrl: undefined,
       state: "Livrée",
@@ -94,14 +94,14 @@ const li = (id, t1, t2, qty, price, rayon) => `
 <li class="liWCCD353_LigneArticle" iidproduit="${id}" stitre1="${t1}" stitre2="${t2}">
  <img class="imgWCCD353_Produit" src="/image.ashx?id=1" />
  <p><span>${t1}</span><br/><span>${t2}</span></p>
- <a class="aWCCD353_VoirRayon" href="/magasin-176901-176901-Lyon-9e/rayon-${rayon}-Volailles.aspx?Filtres=x">Voir le rayon</a>
+ <a class="aWCCD353_VoirRayon" href="/magasin-000001-000001-Ville-Test/rayon-${rayon}-Volailles.aspx?Filtres=x">Voir le rayon</a>
  <a class="aWCCD353_BtnListes" href="#">Ajouter à mes listes</a>
  <p class="pWCCD353_Quantite">x${qty}</p>
  <p class="pWCCD051_Prix">${price} €</p>
 </li>`;
 
 const detailPage = `<html><body>
-<h1>COMMANDE N°26066422 DU 01/09/2026 À 10H27</h1>
+<h1>COMMANDE N°12345678 DU 01/09/2026 À 10H27</h1>
 <div class="rayon"><h3>Viandes Poissons (2 produits)</h3><ul>
 ${li(126817, "Filet de poulet extra tendre", "Le Gaulois - 300g", 2, "7,58", 284326)}
 </ul></div>
@@ -113,7 +113,7 @@ ${li(53002, "Poivron doux rouge", "1p", 3, "2,37", 284400)}
 
 test("parseOrderDetail: header, lines, quantities, unit price, aisle", () => {
   const d = parseOrderDetail(detailPage);
-  assert.equal(d.orderNo, "26066422");
+  assert.equal(d.orderNo, "12345678");
   assert.equal(d.date, "2026-09-01T10:27:00");
   assert.equal(d.lines.length, 3);
   assert.deepEqual(d.lines[0], {
@@ -172,7 +172,7 @@ test("ledger: append-only JSONL, dedup by order, last product record wins, stats
   try {
     const l = new Ledger(dir);
     const order = (no, date, qty, price) => ({
-      orderNo: no, date, storeId: "176901", lines: [{ productId: "126817", label: "Poulet", quantity: qty, lineTotal: price * qty, unitPrice: price }], importedAt: "x",
+      orderNo: no, date, storeId: "000001", lines: [{ productId: "126817", label: "Poulet", quantity: qty, lineTotal: price * qty, unitPrice: price }], importedAt: "x",
     });
     l.appendOrder(order("A", "2026-09-01T10:00:00", 2, 3.79));
     l.appendOrder(order("A", "2026-09-01T10:00:00", 9, 9)); // duplicate ignored

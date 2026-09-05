@@ -2,7 +2,7 @@
  * Leclerc Drive backend client.
  *
  * Endpoints reverse-engineered and validated live against store 053701 on
- * 2026-06-13, product fields re-validated against store 176901 on 2026-09-05 —
+ * 2026-06-13, product fields re-validated against a second store (fd5) on 2026-09-05 —
  * see docs/api-capture.md for the full capture.
  *
  * Confidence levels:

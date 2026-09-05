@@ -21,9 +21,10 @@ Contraintes non négociables, dans l'ordre :
 ## État d'avancement (mis à jour le 2026-09-05)
 
 - Fork : <https://github.com/Sebastien69/mcp-leclerc-drive> (`origin`), amont en `upstream`.
-  Local : `~/Desktop/Perso-Dev/mcp-leclerc-drive`. Build avec Node 24 (`nvm use 24`).
-- Drive de l'utilisateur : **176901 Lyon 9e**, host courses `fd5-courses.leclercdrive.fr`,
-  espace client `fd5-espace-client.leclercdrive.fr`.
+  Build avec Node 24 (`nvm use 24`).
+- Captures live faites sur un drive du cluster `fd5` : host courses
+  `fd5-courses.leclercdrive.fr`, espace client `fd5-espace-client.leclercdrive.fr`.
+  Le magasin de l'utilisateur est dans `~/.mcp-leclerc-drive/config.json`, pas ici.
 - **Lot 0 : fait** — résultats dans `docs/api-capture.md` §5–7. Résumé :
   1. « Mes commandes » et le détail d'une commande sont du **HTML serveur**, pas
      du JSON `initOptions`. Les lignes de commande sont des
@@ -69,7 +70,7 @@ Contraintes non négociables, dans l'ordre :
   - Le prix de ligne du détail de commande est **avant** remises immédiates ;
     les économies sont au niveau de la commande (`savings`).
 - Le serveur a sa config magasin dans `~/.mcp-leclerc-drive/config.json`
-  (176901 / fd5). Sa fenêtre Chrome dédiée (port 9222, profil
+  (`set_store` ou fichier écrit à la main). Sa fenêtre Chrome dédiée (port 9222, profil
   `~/.mcp-leclerc-drive/chrome`) doit être connectée à Leclerc Drive une fois.
 - **Import validé en live** (2026-09-05) : 30 commandes (sept. 2025 → sept.
   2026), ~780 produits distincts. Corrections issues du live : href du postback

@@ -175,7 +175,7 @@ set_store switch to any drive) — see below.
 
 ---
 
-# Addendum 2026-09-05 — store 176901 (Lyon 9e, `fd5`), fork Sebastien69
+# Addendum 2026-09-05 — a second store (cluster `fd5`), fork Sebastien69
 
 Captured live from a logged-in Chrome session (DevTools + in-page inspection).
 Store host `fd5-courses.leclercdrive.fr`; the customer area lives on a
@@ -236,7 +236,7 @@ iQteDisponible > 0`. All unavailable items were exactly `1 / 0`.
   `initOptions` calls on the page are the header widgets). Parse the DOM.
 - One `<table id$="lvHistCom_ctrl{N}_tbEspaceClient">` per order, 5 orders
   shown for 2026 so far. Each row: state ("Livrée"), order number link
-  `N°26066422` → `detail-commande.aspx?iIdC={opaque base64 id}`, order date/time,
+  `N°12345678` → `detail-commande.aspx?iIdC={opaque base64 id}`, order date/time,
   service, payment, slot, total, delivery fee, product count ("55 produits" =
   total quantity, not lines), savings.
 - **History depth**: year filter `ddlFiltreAnnees` offers **2024, 2025, 2026**
@@ -265,7 +265,7 @@ iQteDisponible > 0`. All unavailable items were exactly `1 / 0`.
 - Lines are grouped by aisle heading ("Fruits Légumes (22 produits)").
 - Prices shown are **before** immediate discounts; a "Détail de mes économies"
   block at the bottom lists the BRII lots and the total saved.
-- Header: `COMMANDE N°26066422 DU 01/09/2026 À 10H27`.
+- Header: `COMMANDE N°12345678 DU 01/09/2026 À 10H27`.
 - ✅ `iidproduit` 126817 (order of 2026-09-01) matches the current catalogue id
   of the same product on produits-habituels. Id drift over longer periods is
   still expected — re-resolve by label when the id is unknown to the catalogue.
