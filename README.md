@@ -137,6 +137,40 @@ Or in a Claude Desktop config:
 No env needed — pick your store in-conversation with `find_stores` / `set_store`.
 On first use a Chrome window opens: log into Leclerc Drive once and you're set.
 
+## Installer sans être développeur (Claude Desktop)
+
+Pour partager l'outil à quelqu'un qui n'a ni Node ni GitHub : un fichier
+d'extension Claude Desktop (`.mcpb`) suffit. Claude Desktop embarque son propre
+Node, la personne n'a besoin que de **Google Chrome**.
+
+1. Construire le fichier (une fois, côté développeur) :
+
+   ```bash
+   npm run bundle
+   ```
+
+   → `build/leclerc-drive-<version>.mcpb` (~3 Mo). À envoyer tel quel
+   (AirDrop, mail, messagerie).
+
+2. Côté destinataire : ouvrir le fichier avec Claude Desktop (double-clic, ou
+   Réglages → Extensions → Installer une extension), puis cliquer sur
+   *Installer*.
+
+3. Premier usage, dans une conversation : « Trouve mon drive Leclerc à
+   Nantes » → Claude appelle `find_stores` puis `set_store`. Une fenêtre Chrome
+   s'ouvre sur Leclerc Drive : s'y connecter **une fois** avec son compte, la
+   session est conservée. Ensuite « Importe mes commandes » (`import_order_history`),
+   puis « Prépare mon panier habituel » (`build_cart_from_history`).
+
+Chaque personne utilise son propre compte Leclerc dans sa propre fenêtre Chrome ;
+rien n'est partagé. Le fichier n'est pas signé : Claude Desktop affiche un
+avertissement à l'installation, c'est attendu pour une extension distribuée à
+la main.
+
+> ⚠️ Outil non officiel, sans lien avec E.Leclerc. Usage personnel, avec son
+> propre compte, dans le respect des CGU du site. L'extension ne choisit jamais
+> de créneau, ne valide jamais de commande et ne paie jamais.
+
 ## Development
 
 ```bash

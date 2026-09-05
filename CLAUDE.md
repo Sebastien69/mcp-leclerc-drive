@@ -115,8 +115,16 @@ Contraintes non négociables, dans l'ordre :
     premier blocage (`blocked` dans le rapport). Garder `ean_limit` ≤ 50 par
     session ; 192 fiches sur 474 produits actifs ont leur EAN, le reste se
     complètera au fil des imports.
-- Reste : push GitHub (auth manquante) ; vivre avec, le premier vrai panier
-  dira si les seuils (0,7 / 10 %) sont bons.
+- **Distribution (2026-09-05)** : l'objectif n'est pas une publication npm mais
+  le partage à des proches non développeurs. Choix : extension Claude Desktop
+  (`manifest.json` v0.2 + `npm run bundle` → `build/leclerc-drive-<v>.mcpb`,
+  ~3 Mo, dépendances de prod incluses). Claude Desktop 1.46 embarque Node 24
+  (Electron 42), compatible avec le `WebSocket` natif utilisé par `browser.ts`.
+  Le bundle n'est pas signé. Le dépôt GitHub peut passer en privé ; les
+  données personnelles ont été retirées des fichiers suivis (pas de
+  l'historique git). Version bumpée en 0.4.0 pour marquer le fork.
+- Reste : vivre avec, le premier vrai panier dira si les seuils (0,7 / 10 %)
+  sont bons ; si le format Leclerc bouge, `ContractChangedError` le dira.
 
 ## Décision : forker `skunkobi/mcp-leclerc-drive`
 

@@ -1,0 +1,106 @@
+{
+  "manifest_version": "0.2",
+  "name": "leclerc-drive",
+  "display_name": "E.Leclerc Drive (courses)",
+  "version": "0.4.0",
+  "description": "Prépare ton panier E.Leclerc Drive depuis Claude : historique de commandes, produits habituels, comparaison des prix au kilo, ajout au panier. Connexion et validation restent manuelles.",
+  "long_description": "Outil NON OFFICIEL, sans lien avec E.Leclerc. Usage personnel, avec ton propre compte, dans le respect des conditions d'utilisation du site.\n\nAu premier usage une fenêtre Chrome s'ouvre sur Leclerc Drive : connecte-toi une fois, la session est conservée. Dans la conversation, indique ta ville pour choisir ton drive (find_stores / set_store), puis lance import_order_history pour récupérer tes commandes passées.\n\nL'extension ne choisit jamais de créneau, ne valide jamais de commande et ne paie jamais : elle remplit le panier, tu termines sur le site.",
+  "author": {
+    "name": "Sebastien69",
+    "url": "https://github.com/Sebastien69"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sebastien69/mcp-leclerc-drive"
+  },
+  "license": "MIT",
+  "keywords": [
+    "leclerc",
+    "drive",
+    "courses",
+    "grocery",
+    "panier"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/dist/index.js"
+      ]
+    }
+  },
+  "tools": [
+    {
+      "name": "find_stores",
+      "description": "Trouver les drives proches d'une ville ou d'un code postal"
+    },
+    {
+      "name": "set_store",
+      "description": "Choisir le drive actif"
+    },
+    {
+      "name": "get_store",
+      "description": "Voir le drive actif"
+    },
+    {
+      "name": "search_product",
+      "description": "Rechercher des produits, triés par prix au kilo/litre"
+    },
+    {
+      "name": "compare_products",
+      "description": "Comparer au prix par unité et qualifier les promos"
+    },
+    {
+      "name": "add_to_cart",
+      "description": "Ajouter un produit au panier"
+    },
+    {
+      "name": "add_many",
+      "description": "Ajouter plusieurs produits au panier"
+    },
+    {
+      "name": "update_quantity",
+      "description": "Modifier la quantité d'un produit du panier"
+    },
+    {
+      "name": "remove_from_cart",
+      "description": "Retirer un produit du panier"
+    },
+    {
+      "name": "get_cart",
+      "description": "Voir le panier"
+    },
+    {
+      "name": "import_order_history",
+      "description": "Importer l'historique de commandes"
+    },
+    {
+      "name": "get_order_history",
+      "description": "Voir les commandes importées"
+    },
+    {
+      "name": "get_usual_products",
+      "description": "Produits achetés régulièrement"
+    },
+    {
+      "name": "build_cart_from_history",
+      "description": "Proposer un panier à partir des dernières commandes"
+    },
+    {
+      "name": "find_substitutes",
+      "description": "Trouver un substitut à un produit indisponible"
+    }
+  ],
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": [
+      "darwin",
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=22.0.0"
+    }
+  }
+}

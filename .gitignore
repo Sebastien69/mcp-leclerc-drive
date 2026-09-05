@@ -9,3 +9,4 @@ dist/
 captures/
 *.har
 secrets.json
+build/
