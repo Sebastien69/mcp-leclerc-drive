@@ -382,7 +382,7 @@ server.registerTool(
         .nonnegative()
         .max(200)
         .default(25)
-        .describe("Max de fiches produit chargées pour récupérer EAN/marque (0 pour désactiver)"),
+        .describe("Max de fiches produit chargées pour récupérer EAN/marque (0 pour désactiver). Rester ≤ 50 : au-delà de quelques centaines de pages d'affilée DataDome bloque la session."),
       force_resolve: z.boolean().default(false).describe("Re-résoudre tous les produits, pas seulement les nouveaux"),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -398,7 +398,9 @@ server.registerTool(
       });
       const secs = Math.round(r.durationMs / 1000);
       const lines = [
-        `Import terminé en ${secs} s.`,
+        r.blocked
+          ? `⚠️ Import interrompu après ${secs} s : ${r.blocked} Le reste sera repris au prochain import ; attends quelques minutes et recharge Leclerc Drive dans la fenêtre Chrome du serveur.`
+          : `Import terminé en ${secs} s.`,
         `Commandes vues : ${r.ordersSeen} — importées : ${r.ordersImported.length}` +
           (r.ordersImported.length ? ` (${r.ordersImported.join(", ")})` : "") +
           ` — déjà connues : ${r.ordersSkipped}.`,

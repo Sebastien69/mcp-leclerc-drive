@@ -108,6 +108,12 @@ Contraintes non négociables, dans l'ordre :
   - Rythme mesuré : ~1,5–1,8 s par requête (recherche, détail, fiche). Import
     initial de 30 commandes + 200 résolutions ≈ 6 min ; ensuite quelques
     secondes.
+  - **DataDome frappe aussi les longues séries** : un run de ~400 pages
+    (200 recherches + fiches EAN) a pris un 403 après ~200 fiches, et tout le
+    reste du run a échoué (55 min perdues). L'importeur s'arrête désormais au
+    premier blocage (`blocked` dans le rapport). Garder `ean_limit` ≤ 50 par
+    session ; 192 fiches sur 474 produits actifs ont leur EAN, le reste se
+    complètera au fil des imports.
 - Reste : push GitHub (auth manquante) ; vivre avec, le premier vrai panier
   dira si les seuils (0,7 / 10 %) sont bons.
 

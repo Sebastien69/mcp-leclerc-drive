@@ -42,6 +42,13 @@ incl. DataDome, replayed).
 - Mutating requests send header `X-Requested-With: XMLHttpRequest` and
   `Content-Type: application/x-www-form-urlencoded; charset=UTF-8`.
 
+- ⚠️ **Long sequential runs get struck too (2026-09-05).** With the v0.3 CDP
+  approach and the 1 s + jitter cadence, a single run of ~400 page loads
+  (200 searches + product sheets of ~480 KB) hit HTTP 403 after ~200 sheets;
+  every later request in that run failed (4 attempts each), ~55 min wasted.
+  Keep a run under ~200 requests, prefer small EAN budgets (≤ 50) spread over
+  sessions, and stop at the first 403 (the importer now does).
+
 ## 1. search_product — `GET .../recherche.aspx?TexteRecherche={query}`
 
 - Server-rendered HTML (ASP.NET). **No separate search XHR.**

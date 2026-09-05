@@ -35,6 +35,8 @@ export interface ImportOptions {
 }
 
 export interface ImportReport {
+  /** Set when Leclerc/DataDome started refusing requests: the run stopped early. */
+  blocked?: string;
   ordersSeen: number;
   ordersImported: string[];
   ordersSkipped: number;
@@ -81,6 +83,7 @@ export class HistoryImporter {
       return opts.forceResolve || !rec || rec.status === "unresolved";
     });
     const counts = { byId: 0, byLabel: 0, missing: 0, unresolved: 0 };
+    let blocked: string | undefined;
     if (todo.length > 0) {
       log(`résolution de ${todo.length} produit(s) contre le catalogue…`);
       const habitual = await this.history.habitualProducts();
@@ -126,6 +129,12 @@ export class HistoryImporter {
           if (!prev) {
             this.ledger.upsertProduct({ productId: p.productId, label: p.label, status: "unresolved", resolvedAt: now });
           }
+          if (isBlock(err)) {
+            // DataDome strike: stop hammering, the rest stays "unresolved" for the next run.
+            blocked = (err as Error).message;
+            counts.unresolved += todo.length - todo.indexOf(p) - 1;
+            break;
+          }
           continue;
         }
         if (found && kind) {
@@ -148,7 +157,7 @@ export class HistoryImporter {
 
     // 4. EAN / brand from the product sheet (once per product) -----------------
     let eanFetched = 0;
-    if (eanLimit > 0) {
+    if (eanLimit > 0 && !blocked) {
       const pending = [...this.ledger.products().values()].filter(
         (r) => r.status === "active" && !r.eanFetchedAt && r.productUrl,
       );
@@ -164,11 +173,16 @@ export class HistoryImporter {
           eanFetched++;
         } catch (err) {
           log(`fiche produit ${r.currentId ?? r.productId} : ${(err as Error).message}`);
+          if (isBlock(err)) {
+            blocked = (err as Error).message;
+            break;
+          }
         }
       }
     }
 
     return {
+      blocked,
       ordersSeen: summaries.length,
       ordersImported: imported,
       ordersSkipped: skipped,
@@ -178,6 +192,12 @@ export class HistoryImporter {
       durationMs: Date.now() - t0,
     };
   }
+}
+
+/** A DataDome / expired-session refusal, as raised by LeclercClient.send(). */
+function isBlock(err: unknown): boolean {
+  const m = err instanceof Error ? err.message : String(err);
+  return /Bloqué par Leclerc Drive|HTTP 403|HTTP 429|Session Leclerc Drive expirée/.test(m);
 }
 
 function recordFrom(
